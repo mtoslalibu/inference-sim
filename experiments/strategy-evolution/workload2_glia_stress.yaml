@@ -1,0 +1,72 @@
+version: "2"
+seed: 0
+category: language
+clients:
+    - id: prefix-heavy-A
+      prefix_group: "system-A"
+      slo_class: ""
+      rate_fraction: 0.4
+      arrival:
+        process: gamma
+        cv: 3.0
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 1024
+            std_dev: 128
+            min: 512
+            max: 1536
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 64
+            std_dev: 16
+            min: 16
+            max: 128
+      prefix_length: 768
+      streaming: false
+    - id: prefix-heavy-B
+      prefix_group: "system-B"
+      slo_class: ""
+      rate_fraction: 0.4
+      arrival:
+        process: gamma
+        cv: 3.0
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 1024
+            std_dev: 128
+            min: 512
+            max: 1536
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 64
+            std_dev: 16
+            min: 16
+            max: 128
+      prefix_length: 768
+      streaming: false
+    - id: background
+      slo_class: ""
+      rate_fraction: 0.2
+      arrival:
+        process: poisson
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 256
+            std_dev: 64
+            min: 64
+            max: 512
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 128
+            std_dev: 32
+            min: 16
+            max: 256
+      streaming: false
+aggregate_rate: 80
+num_requests: 5000

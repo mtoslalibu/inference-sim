@@ -1,0 +1,28 @@
+version: "2"
+seed: 0
+category: language
+clients:
+    - id: prefix-heavy-burst
+      tenant_id: ""
+      slo_class: ""
+      rate_fraction: 1
+      arrival:
+        process: poisson
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 768
+            std_dev: 128
+            min: 256
+            max: 1536
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 128
+            std_dev: 32
+            min: 16
+            max: 512
+      prefix_length: 512
+      streaming: false
+aggregate_rate: 60
+num_requests: 4000

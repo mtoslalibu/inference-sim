@@ -1,0 +1,27 @@
+version: "2"
+seed: 0
+category: language
+clients:
+    - id: load-stress-varied
+      tenant_id: ""
+      slo_class: ""
+      rate_fraction: 1
+      arrival:
+        process: poisson
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 512
+            std_dev: 384
+            min: 64
+            max: 2048
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 256
+            std_dev: 192
+            min: 16
+            max: 1024
+      streaming: false
+aggregate_rate: 80
+num_requests: 5000

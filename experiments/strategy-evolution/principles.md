@@ -47,3 +47,34 @@ Using cache as a triage filter (reduce candidate set) then load-balancing within
 **Evidence:** Iteration 3 — Adaptive-Cache-LB beats GLIA by 23-41% on E2E while matching 3:2:2 exactly.
 
 **Implication:** The winning architecture for cache-aware routing is: filter by cache, then balance by load. Not: weighted combination of cache and load scores.
+
+## P7: Routing opportunity ceiling is ~1% E2E in the blackbox DES
+
+Three factors combine to make all non-degenerate routing algorithms equivalent within ~1% E2E:
+1. InFlightRequests is perfectly synchronous (updated per routing decision, never stale)
+2. KV cache is oversized (1M blocks default; all instances cache all prefixes → no cache differentiation)
+3. Blackbox model has no preemption/KV-pressure effects (latency is pure function of token count and batch size)
+
+**Evidence:** Iteration 4 — exhaustive weight ratio sweep across 3 workloads × 7 weight ratios. All non-degenerate configurations produce identical E2E within ±0.3%. Hash-affinity with 2-instance constraint was 5-11% WORSE. Token-weighted tiebreaking had zero measurable impact.
+
+**Implication:** Beating 3:2:2 by 30%+ requires changes beyond routing: scheduling, admission control, batch formation, or a simulator with imperfect InFlightRequests (e.g., network-delayed updates).
+
+## P8: Priority-through-routing is defeated by PriorityPolicy
+
+The `req.Priority` field set by `RoutingDecision.Priority` is overwritten every scheduling step by `sim.priorityPolicy.Compute()`. With the default `constant` policy, all priorities become 0.0 regardless of what the routing layer sets.
+
+**Evidence:** Iteration 5 — Priority-Cache-LB set Priority = 1/(1+inputTokens) and tested with `--scheduler priority-fcfs`. Results were byte-identical to FCFS because the constant PriorityPolicy zeros out all routing-set priorities.
+
+**Implication:** To influence scheduling from routing, the simulator would need a PriorityPolicy that preserves or incorporates routing-set priorities.
+
+## P9: Prefix cache signal provides no routing benefit at any staleness level
+
+At any cache-signal-delay value, the `precise-prefix-cache` scorer either hurts or has no effect:
+- Fresh (0–0.1s): Causes 3–4x E2E degradation by creating catastrophic load imbalance (ALL cache-aware requests pile onto the cached instance)
+- Moderate to stale (≥0.5s): Signal becomes stale noise; indistinguishable from random tiebreaking
+
+Root cause: with oversized KV cache (1M blocks), ALL instances cache ALL prefixes. Fresh cache signal accurately identifies this → no differentiation. When some instances temporarily lack a prefix (post-eviction), the fresh signal creates pile-on; the stale signal misses the window.
+
+**Evidence:** Iteration 5 — swept cache-signal-delay [0s, 0.1s, 0.5s, 1s, 2s, 5s] for 3:2:2, Adaptive-Cache-LB, and qd:1. Both cache-aware algorithms degraded identically at low delay. At ≥0.5s, all three converged to within 0.2%.
+
+**Implication:** The only beneficial use of cache information is to avoid GLIA's failure mode (no cache awareness + inadmissibility penalty). The Adaptive-Cache-LB's advantage over GLIA comes from NOT penalizing cache-rich instances, not from superior cache-aware routing.

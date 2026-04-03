@@ -1,0 +1,72 @@
+version: "2"
+seed: 0
+category: language
+clients:
+    - id: doc-A
+      prefix_group: "doc-A"
+      slo_class: ""
+      rate_fraction: 0.4
+      arrival:
+        process: gamma
+        cv: 2.5
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 512
+            std_dev: 128
+            min: 256
+            max: 1024
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 64
+            std_dev: 16
+            min: 16
+            max: 128
+      prefix_length: 256
+      streaming: false
+    - id: doc-B
+      prefix_group: "doc-B"
+      slo_class: ""
+      rate_fraction: 0.4
+      arrival:
+        process: gamma
+        cv: 2.5
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 512
+            std_dev: 128
+            min: 256
+            max: 1024
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 64
+            std_dev: 16
+            min: 16
+            max: 128
+      prefix_length: 256
+      streaming: false
+    - id: cold
+      slo_class: ""
+      rate_fraction: 0.2
+      arrival:
+        process: poisson
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 128
+            std_dev: 32
+            min: 32
+            max: 256
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 32
+            std_dev: 8
+            min: 8
+            max: 64
+      streaming: false
+aggregate_rate: 50
+num_requests: 1500

@@ -1,0 +1,52 @@
+version: "2"
+seed: 0
+category: language
+clients:
+    - id: tiny-chat
+      prefix_group: "sys-prompt"
+      slo_class: ""
+      rate_fraction: 0.85
+      arrival:
+        process: gamma
+        cv: 2.0
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 64
+            std_dev: 16
+            min: 16
+            max: 128
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 16
+            std_dev: 4
+            min: 4
+            max: 32
+      prefix_length: 32
+      streaming: false
+    - id: huge-analysis
+      prefix_group: "analysis-ctx"
+      slo_class: ""
+      rate_fraction: 0.15
+      arrival:
+        process: gamma
+        cv: 3.0
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 4096
+            std_dev: 1024
+            min: 2048
+            max: 8192
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 512
+            std_dev: 128
+            min: 64
+            max: 1024
+      prefix_length: 1024
+      streaming: false
+aggregate_rate: 120
+num_requests: 6000

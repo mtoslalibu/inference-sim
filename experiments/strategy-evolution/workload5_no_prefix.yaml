@@ -1,0 +1,27 @@
+version: "2"
+seed: 0
+category: language
+clients:
+    - id: unique-queries
+      slo_class: ""
+      rate_fraction: 1.0
+      arrival:
+        process: gamma
+        cv: 3.0
+      input_distribution:
+        type: gaussian
+        params:
+            mean: 512
+            std_dev: 256
+            min: 64
+            max: 2048
+      output_distribution:
+        type: gaussian
+        params:
+            mean: 128
+            std_dev: 64
+            min: 16
+            max: 512
+      streaming: false
+aggregate_rate: 100
+num_requests: 6000

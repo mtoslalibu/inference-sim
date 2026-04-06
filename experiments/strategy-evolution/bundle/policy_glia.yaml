@@ -1,0 +1,34 @@
+# GLIA: Head-Room Allocator (HRA)
+#
+# Requires: glia.go swapped into sim/routing.go
+#
+# The Route() method bypasses the scorer pipeline entirely. Instead:
+#   1. Estimates per-instance KV headroom after hypothetically placing the request
+#   2. Projects block usage from input tokens (with decode-to-prompt ratio 0.6)
+#   3. Scores based on projected utilization + queue load
+#   4. Inadmissible instances get -10.0 penalty (the main source of GLIA's weakness)
+#
+# The scorers below exist for constructor compatibility.
+# The scorer pipeline is NOT invoked by Route().
+#
+# Signals accessed (directly from RoutingSnapshot, not via scorers):
+#   - FreeKVBlocks (periodic snapshot, stale ~5s)
+#   - KVUtilization (periodic snapshot, stale ~5s)
+#   - QueueDepth + BatchSize + InFlightRequests (mixed freshness)
+#   - req.InputTokens (request metadata)
+
+admission:
+  policy: always-admit
+
+routing:
+  policy: weighted
+  scorers:
+    - name: queue-depth
+      weight: 1.0
+    - name: kv-utilization
+      weight: 1.0
+
+priority:
+  policy: constant
+
+scheduler: fcfs

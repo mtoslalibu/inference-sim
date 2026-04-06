@@ -1,0 +1,30 @@
+# Baseline: llm-d EPP Precise Prefix Cache (2:1:1)
+#
+# Matches llm-d production config: deploy/config/epp-precise-prefix-cache-config.yaml
+# Weight ratio: prefix-affinity:2, kv-utilization:1, queue-depth:1
+#
+# Uses the standard WeightedScoring.Route() scorer pipeline.
+# All three scorers are evaluated per instance, combined via weighted sum, then argmax.
+#
+# Signals accessed:
+#   - prefix-affinity: router-side prefix match estimation (hash-based)
+#   - kv-utilization:  1 - KVUtilization (periodic snapshot)
+#   - queue-depth:     min-max normalization of EffectiveLoad() (synchronous InFlightRequests)
+
+admission:
+  policy: always-admit
+
+routing:
+  policy: weighted
+  scorers:
+    - name: prefix-affinity
+      weight: 2.0
+    - name: kv-utilization
+      weight: 1.0
+    - name: queue-depth
+      weight: 1.0
+
+priority:
+  policy: constant
+
+scheduler: fcfs

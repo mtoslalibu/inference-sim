@@ -43,7 +43,7 @@ def parse_filename(filename):
     seed = int(parts[1])
     prefix = parts[0]
     # Known workloads
-    for wl in ["fm5", "fm2a", "fm2b", "fm1", "fm3", "fm4"]:
+    for wl in ["fm6", "fm5", "fm2a", "fm2b", "fm1", "fm3", "fm4"]:
         if prefix.startswith(wl + "_"):
             policy = prefix[len(wl) + 1:]
             return wl, policy, seed
@@ -83,11 +83,12 @@ def main():
         "fm3": "FM-3: Burst Absorption",
         "fm4": "FM-4: Multi-Regime Phased",
         "fm5": "FM-5: Short Output + Many Groups (Classification)",
+        "fm6": "FM-6: Cold Traffic Under KV Pressure",
     }
 
     baseline_key = "baseline-211"
 
-    for wl in ["fm1", "fm2a", "fm2b", "fm3", "fm4", "fm5"]:
+    for wl in ["fm1", "fm2a", "fm2b", "fm3", "fm4", "fm5", "fm6"]:
         if wl not in data:
             continue
 
@@ -162,7 +163,7 @@ def main():
     print("  SUMMARY: Failure Modes Where 2:1:1 Loses >= 15% (Bonus: >= 25%)")
     print(f"{'='*80}")
     found = False
-    for wl in ["fm1", "fm2a", "fm2b", "fm3", "fm4", "fm5"]:
+    for wl in ["fm1", "fm2a", "fm2b", "fm3", "fm4", "fm5", "fm6"]:
         if wl not in data or baseline_key not in data[wl]:
             continue
 

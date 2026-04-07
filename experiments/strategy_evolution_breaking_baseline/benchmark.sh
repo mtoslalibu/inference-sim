@@ -45,6 +45,7 @@ fm2b:workload_fm2b_groups_lt_instances.yaml:4
 fm3:workload_fm3_burst.yaml:4
 fm4:workload_fm4_multiregime.yaml:4
 fm5:workload_fm5_short_output.yaml:4
+fm6:workload_fm6_cold_pressure.yaml:4
 "
 
 # Filter to single FM if argument provided

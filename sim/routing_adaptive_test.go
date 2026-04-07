@@ -5,44 +5,9 @@ import (
 	"testing"
 )
 
-// TestAdaptiveScoring_CacheEqualized_PureLoadBalance verifies that when all
-// instances have the same cache score, the adaptive policy falls back to
-// pure load balancing (no ppc influence).
-func TestAdaptiveScoring_CacheEqualized_PureLoadBalance(t *testing.T) {
-	// GIVEN: no cache function (all ppc scores equalize to 0.5)
-	snapshots := []RoutingSnapshot{
-		{ID: "inst_0", QueueDepth: 5, BatchSize: 2, InFlightRequests: 1, KVUtilization: 0.3},
-		{ID: "inst_1", QueueDepth: 1, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.1},
-		{ID: "inst_2", QueueDepth: 8, BatchSize: 3, InFlightRequests: 2, KVUtilization: 0.5},
-	}
-	state := &RouterState{Snapshots: snapshots, Clock: 1000}
-	req := &Request{ID: "req1", InputTokens: []int{1, 2, 3}}
-
-	// Build pure qd policy for comparison
-	qdOnly := newRoutingPolicyInternal("weighted", []ScorerConfig{
-		{Name: "queue-depth", Weight: 1.0},
-	}, 16, nil, nil)
-	adaptive := newAdaptiveScoring(16, nil, nil)
-
-	// WHEN: both route the same request
-	qdDecision := qdOnly.Route(req, state)
-	adaptiveDecision := adaptive.Route(req, state)
-
-	// THEN: adaptive should route to the same instance as pure qd
-	// (inst_1 has lowest effective load = 1)
-	if adaptiveDecision.TargetInstance != qdDecision.TargetInstance {
-		t.Errorf("Cache equalized: adaptive chose %q, qd-only chose %q",
-			adaptiveDecision.TargetInstance, qdDecision.TargetInstance)
-	}
-	if adaptiveDecision.TargetInstance != "inst_1" {
-		t.Errorf("Expected inst_1 (lowest load), got %q", adaptiveDecision.TargetInstance)
-	}
-}
-
-// TestAdaptiveScoring_CacheDifferentiated_StrongAffinity verifies that when
-// cache scores differ, the adaptive policy uses strong cache affinity.
-func TestAdaptiveScoring_CacheDifferentiated_StrongAffinity(t *testing.T) {
-	// GIVEN: cache function where inst_0 has many cached blocks, inst_1 has none
+// TestAdaptiveScoring_Regime1_CacheAffinity verifies that when cache scores
+// differ, the adaptive policy uses strong cache affinity (ppc:4, qd:1, no kvu).
+func TestAdaptiveScoring_Regime1_CacheAffinity(t *testing.T) {
 	snapshots := []RoutingSnapshot{
 		{ID: "inst_0", QueueDepth: 3, BatchSize: 1, InFlightRequests: 2, KVUtilization: 0.7},
 		{ID: "inst_1", QueueDepth: 1, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.3},
@@ -51,43 +16,84 @@ func TestAdaptiveScoring_CacheDifferentiated_StrongAffinity(t *testing.T) {
 	req := &Request{ID: "req1", InputTokens: []int{1, 2, 3, 4, 5}}
 
 	cacheFn := cacheQueryFn{
-		"inst_0": func(tokens []int) int { return 5 }, // 5 cached blocks
-		"inst_1": func(tokens []int) int { return 0 }, // no cache
+		"inst_0": func(tokens []int) int { return 5 },
+		"inst_1": func(tokens []int) int { return 0 },
 	}
 
 	adaptive := newAdaptiveScoring(16, nil, cacheFn)
-
-	// WHEN: route a request
 	decision := adaptive.Route(req, state)
 
-	// THEN: should route to inst_0 (cached instance) despite higher load
-	// because ppc:4 outweighs qd:1
+	// inst_0 has cache hits, ppc:4 should outweigh qd:1 despite higher load
 	if decision.TargetInstance != "inst_0" {
-		t.Errorf("Cache differentiated: expected inst_0 (cached), got %q", decision.TargetInstance)
+		t.Errorf("Regime 1: expected inst_0 (cached), got %q", decision.TargetInstance)
 	}
 }
 
-// TestAdaptiveScoring_NeverUsesKVU verifies kvu is not a factor.
-func TestAdaptiveScoring_NeverUsesKVU(t *testing.T) {
-	// GIVEN: two instances with extreme KV utilization difference but same load
-	// If kvu were active, it would prefer inst_1 (lower utilization)
+// TestAdaptiveScoring_Regime2_MemoryAware verifies that when cache is
+// equalized but KV utilization is high, kvu is activated.
+func TestAdaptiveScoring_Regime2_MemoryAware(t *testing.T) {
+	// No cache fn → ppc scores equalize. High KV util → regime 2.
+	// inst_0 has high KV util (nearly full), inst_1 has moderate.
+	// Same queue depth → kvu should prefer inst_1 (more room).
 	snapshots := []RoutingSnapshot{
-		{ID: "inst_0", QueueDepth: 2, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.95},
-		{ID: "inst_1", QueueDepth: 2, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.05},
+		{ID: "inst_0", QueueDepth: 2, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.9},
+		{ID: "inst_1", QueueDepth: 2, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.6},
 	}
 	state := &RouterState{Snapshots: snapshots, Clock: 1000}
 	req := &Request{ID: "req1", InputTokens: []int{1, 2}}
 
 	adaptive := newAdaptiveScoring(16, nil, nil)
-
-	// WHEN: route (no cache fn, ppc scores equalize, pure qd mode)
 	decision := adaptive.Route(req, state)
 
-	// THEN: both instances have same load, kvu should NOT break the tie
-	// deterministically toward inst_1. With nil rng, first instance wins.
+	// Both have same load (qd ties), kvu should break tie toward inst_1
+	if decision.TargetInstance != "inst_1" {
+		t.Errorf("Regime 2: expected inst_1 (lower KV util), got %q", decision.TargetInstance)
+	}
+}
+
+// TestAdaptiveScoring_Regime3_LoadBalance verifies that when cache is
+// equalized and memory is spacious, pure load balancing is used.
+func TestAdaptiveScoring_Regime3_LoadBalance(t *testing.T) {
+	// No cache fn → ppc equalizes. Low KV util → regime 3. Pure qd.
+	snapshots := []RoutingSnapshot{
+		{ID: "inst_0", QueueDepth: 5, BatchSize: 2, InFlightRequests: 1, KVUtilization: 0.2},
+		{ID: "inst_1", QueueDepth: 1, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.1},
+		{ID: "inst_2", QueueDepth: 8, BatchSize: 3, InFlightRequests: 2, KVUtilization: 0.3},
+	}
+	state := &RouterState{Snapshots: snapshots, Clock: 1000}
+	req := &Request{ID: "req1", InputTokens: []int{1, 2, 3}}
+
+	adaptive := newAdaptiveScoring(16, nil, nil)
+	decision := adaptive.Route(req, state)
+
+	// inst_1 has lowest effective load (1), should be selected
+	if decision.TargetInstance != "inst_1" {
+		t.Errorf("Regime 3: expected inst_1 (lowest load), got %q", decision.TargetInstance)
+	}
+}
+
+// TestAdaptiveScoring_Regime2_KVUDoesNotFightPPC verifies that kvu only
+// activates when ppc is irrelevant (cache equalized).
+func TestAdaptiveScoring_Regime2_KVUDoesNotFightPPC(t *testing.T) {
+	// When cache IS differentiated, kvu should NOT be active even with high KV util
+	snapshots := []RoutingSnapshot{
+		{ID: "inst_0", QueueDepth: 2, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.9},
+		{ID: "inst_1", QueueDepth: 2, BatchSize: 0, InFlightRequests: 0, KVUtilization: 0.3},
+	}
+	state := &RouterState{Snapshots: snapshots, Clock: 1000}
+	req := &Request{ID: "req1", InputTokens: []int{1, 2, 3}}
+
+	cacheFn := cacheQueryFn{
+		"inst_0": func(tokens []int) int { return 5 },
+		"inst_1": func(tokens []int) int { return 0 },
+	}
+
+	adaptive := newAdaptiveScoring(16, nil, cacheFn)
+	decision := adaptive.Route(req, state)
+
+	// Despite inst_0 having 0.9 KV util, cache affinity (regime 1) should win
 	if decision.TargetInstance != "inst_0" {
-		t.Errorf("KVU influence detected: expected inst_0 (first tie), got %q",
-			decision.TargetInstance)
+		t.Errorf("Expected regime 1 (cache-affinity) to inst_0, got %q", decision.TargetInstance)
 	}
 }
 

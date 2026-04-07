@@ -1,0 +1,15 @@
+admission:
+  policy: always-admit
+
+routing:
+  policy: weighted
+  scorers:
+    - name: precise-prefix-cache
+      weight: 2.0
+    - name: queue-depth
+      weight: 1.0
+
+priority:
+  policy: constant
+
+scheduler: fcfs

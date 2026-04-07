@@ -454,6 +454,176 @@ func (a *AdaptiveScoringV3) Route(req *Request, state *RouterState) RoutingDecis
 	)
 }
 
+// AdaptiveScoringGolden is the "golden" adaptive router that combines the best
+// insights from v2 (regime detection + load-aware threshold cap) with additional
+// GIE-parity signals: active-requests (synchronous, llm-d #957) and
+// running-requests (batch size, GIE #956).
+//
+// Key evolution over v2:
+// - Adds active-requests as a synchronous load signal. v3's experiment proved
+//   synchronous InFlightRequests gives massive TTFT wins (82-97% over v2 on FM-1).
+//   But v3's min-max normalization regressed on FM-5. active-requests uses llm-d's
+//   (max-count)/max formula which is gentler — idle instances score 1.0 regardless.
+// - Adds running-requests (BatchSize) as a secondary periodic signal. Instances
+//   with large running batches will generate more tokens and fill KV faster.
+//
+// Five scorers (all GIE/llm-d parity):
+//   ppc:  precise-prefix-cache (periodic, cache-signal-delay)
+//   la:   load-aware (periodic, threshold-capped QueueDepth)
+//   ar:   active-requests (synchronous InFlightRequests, llm-d formula)
+//   rr:   running-requests (periodic BatchSize, min-max)
+//   kvu:  kv-utilization (periodic)
+//
+// Three regimes:
+//  1. Cache-affinity (spread > 0.1): ppc:4, ar:1, la:1
+//     — Strong prefix routing with both synchronous and periodic load guards
+//  2. Memory-aware (spread <= 0.1, avgKVUtil > 0.7): ar:2, la:1, rr:1, kvu:1
+//     — Multi-signal load balancing with KV protection
+//  3. Load-balance (spread <= 0.1, avgKVUtil <= 0.7): ar:2, la:1, rr:1
+//     — Spread load using all available signals
+type AdaptiveScoringGolden struct {
+	ppcScorer scorerFunc // precise-prefix-cache
+	laScorer  scorerFunc // load-aware (threshold-capped)
+	arScorer  scorerFunc // active-requests (synchronous, llm-d)
+	rrScorer  scorerFunc // running-requests (batch size, GIE)
+	kvuScorer scorerFunc // kv-utilization
+	observers []observerFunc
+	rng       *rand.Rand
+}
+
+// newAdaptiveScoringGolden creates an AdaptiveScoringGolden policy.
+func newAdaptiveScoringGolden(blockSize int, rng *rand.Rand, cacheFn cacheQueryFn) *AdaptiveScoringGolden {
+	ppc, ppcObs := newScorerWithObserver("precise-prefix-cache", blockSize, cacheFn)
+	la, _ := newScorerWithObserver("load-aware", blockSize, cacheFn)
+	ar, _ := newScorerWithObserver("active-requests", blockSize, cacheFn)
+	rr, _ := newScorerWithObserver("running-requests", blockSize, cacheFn)
+	kvu, _ := newScorerWithObserver("kv-utilization", blockSize, cacheFn)
+
+	var observers []observerFunc
+	if ppcObs != nil {
+		observers = append(observers, ppcObs)
+	}
+
+	return &AdaptiveScoringGolden{
+		ppcScorer: ppc,
+		laScorer:  la,
+		arScorer:  ar,
+		rrScorer:  rr,
+		kvuScorer: kvu,
+		observers: observers,
+		rng:       rng,
+	}
+}
+
+// Route implements RoutingPolicy for AdaptiveScoringGolden.
+func (a *AdaptiveScoringGolden) Route(req *Request, state *RouterState) RoutingDecision {
+	snapshots := state.Snapshots
+	if len(snapshots) == 0 {
+		panic("AdaptiveScoringGolden.Route: empty snapshots")
+	}
+
+	// Step 1: evaluate all five scorers.
+	ppcScores := a.ppcScorer(req, snapshots)
+	laScores := a.laScorer(req, snapshots)
+	arScores := a.arScorer(req, snapshots)
+	rrScores := a.rrScorer(req, snapshots)
+	kvuScores := a.kvuScorer(req, snapshots)
+
+	// Step 2: measure cache score differentiation.
+	minPPC := 2.0
+	maxPPC := -1.0
+	for _, snap := range snapshots {
+		s := ppcScores[snap.ID]
+		if s < minPPC {
+			minPPC = s
+		}
+		if s > maxPPC {
+			maxPPC = s
+		}
+	}
+	cacheSpread := maxPPC - minPPC
+
+	// Step 3: measure average KV utilization.
+	var totalKVUtil float64
+	for _, snap := range snapshots {
+		totalKVUtil += snap.KVUtilization
+	}
+	avgKVUtil := totalKVUtil / float64(len(snapshots))
+
+	// Step 4: select regime and weights.
+	var ppcW, laW, arW, rrW, kvuW float64
+	var regime string
+
+	if cacheSpread > adaptiveCacheSpreadThreshold {
+		// Regime 1: Cache-affinity — prefix cached unevenly.
+		// Strong ppc with dual load guards (synchronous ar + periodic la).
+		ppcW = 4.0 / 6.0
+		arW = 1.0 / 6.0
+		laW = 1.0 / 6.0
+		rrW = 0.0
+		kvuW = 0.0
+		regime = "cache-affinity"
+	} else if avgKVUtil > adaptiveKVUtilThreshold {
+		// Regime 2: Memory-aware — no cache affinity, KV tight.
+		// Multi-signal load balancing with KV protection.
+		ppcW = 0.0
+		arW = 2.0 / 5.0
+		laW = 1.0 / 5.0
+		rrW = 1.0 / 5.0
+		kvuW = 1.0 / 5.0
+		regime = "memory-aware"
+	} else {
+		// Regime 3: Load-balance — no cache affinity, memory spacious.
+		// Spread load using synchronous + periodic signals.
+		ppcW = 0.0
+		arW = 2.0 / 4.0
+		laW = 1.0 / 4.0
+		rrW = 1.0 / 4.0
+		kvuW = 0.0
+		regime = "load-balance"
+	}
+
+	// Step 5: weighted combination.
+	scores := make(map[string]float64, len(snapshots))
+	for _, snap := range snapshots {
+		ppc := clampScore(ppcScores[snap.ID])
+		la := clampScore(laScores[snap.ID])
+		ar := clampScore(arScores[snap.ID])
+		rr := clampScore(rrScores[snap.ID])
+		kvu := clampScore(kvuScores[snap.ID])
+		scores[snap.ID] = ppc*ppcW + la*laW + ar*arW + rr*rrW + kvu*kvuW
+	}
+
+	// Step 6: argmax with tie-breaking.
+	bestScore := -1.0
+	for _, snap := range snapshots {
+		if scores[snap.ID] > bestScore {
+			bestScore = scores[snap.ID]
+		}
+	}
+	var tied []int
+	for i, snap := range snapshots {
+		if scores[snap.ID] == bestScore {
+			tied = append(tied, i)
+		}
+	}
+	bestIdx := tied[0]
+	if len(tied) > 1 && a.rng != nil {
+		bestIdx = tied[a.rng.Intn(len(tied))]
+	}
+
+	// Step 7: notify observers.
+	for _, obs := range a.observers {
+		obs(req, snapshots[bestIdx].ID)
+	}
+
+	return NewRoutingDecisionWithScores(
+		snapshots[bestIdx].ID,
+		fmt.Sprintf("adaptive-golden-%s (score=%.3f, spread=%.2f, kvUtil=%.2f)", regime, bestScore, cacheSpread, avgKVUtil),
+		scores,
+	)
+}
+
 // clampScore clamps a scorer output to [0,1].
 func clampScore(s float64) float64 {
 	if s < 0 {

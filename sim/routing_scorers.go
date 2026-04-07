@@ -33,6 +33,8 @@ var validScorerNames = map[string]bool{
 	"load-balance":         true,
 	"load-aware":           true,
 	"inflight-requests":    true,
+	"active-requests":      true,
+	"running-requests":     true,
 }
 
 // IsValidScorer returns true if name is a recognized scorer.
@@ -125,6 +127,10 @@ func newScorerWithObserver(name string, blockSize int, cacheFn cacheQueryFn) (sc
 		return scoreLoadAware, nil
 	case "inflight-requests":
 		return scoreInFlightRequests, nil
+	case "active-requests":
+		return scoreActiveRequests, nil
+	case "running-requests":
+		return scoreRunningRequests, nil
 	default:
 		panic(fmt.Sprintf("unknown scorer %q", name))
 	}
@@ -254,6 +260,63 @@ func scoreInFlightRequests(_ *Request, snapshots []RoutingSnapshot) map[string]f
 		} else {
 			ifr := snap.InFlightRequests
 			scores[snap.ID] = float64(maxIFR-ifr) / float64(maxIFR-minIFR)
+		}
+	}
+	return scores
+}
+
+// scoreActiveRequests computes per-instance scores using llm-d's active-request-scorer
+// formula. Instances with 0 in-flight always score 1.0. Busy instances:
+// score = (maxCount - count) / maxCount.
+//
+// Matches llm-d's active_request.go:193-230 (simplified — no TTL cleanup needed in sim).
+//
+// Signal freshness (R17, INV-7):
+//
+//	Reads: InFlightRequests (Synchronous — updated at gateway on dispatch/completion).
+func scoreActiveRequests(_ *Request, snapshots []RoutingSnapshot) map[string]float64 {
+	scores := make(map[string]float64, len(snapshots))
+	maxCount := 0
+	for _, snap := range snapshots {
+		if snap.InFlightRequests > maxCount {
+			maxCount = snap.InFlightRequests
+		}
+	}
+	for _, snap := range snapshots {
+		if snap.InFlightRequests == 0 || maxCount == 0 {
+			scores[snap.ID] = 1.0
+		} else {
+			scores[snap.ID] = float64(maxCount-snap.InFlightRequests) / float64(maxCount)
+		}
+	}
+	return scores
+}
+
+// scoreRunningRequests computes per-instance scores using min-max normalization
+// on BatchSize (running/in-batch request count). Lower batch size → higher score.
+// All-equal sizes → all score 1.0.
+//
+// Matches GIE's running-requests-size-scorer (runningrequest.go:99).
+//
+// Signal freshness (R17, INV-7):
+//
+//	Reads: BatchSize (Periodic when interval>0, else Immediate).
+func scoreRunningRequests(_ *Request, snapshots []RoutingSnapshot) map[string]float64 {
+	scores := make(map[string]float64, len(snapshots))
+	minBatch, maxBatch := math.MaxInt, 0
+	for _, snap := range snapshots {
+		if snap.BatchSize < minBatch {
+			minBatch = snap.BatchSize
+		}
+		if snap.BatchSize > maxBatch {
+			maxBatch = snap.BatchSize
+		}
+	}
+	for _, snap := range snapshots {
+		if maxBatch == minBatch {
+			scores[snap.ID] = 1.0
+		} else {
+			scores[snap.ID] = float64(maxBatch-snap.BatchSize) / float64(maxBatch-minBatch)
 		}
 	}
 	return scores

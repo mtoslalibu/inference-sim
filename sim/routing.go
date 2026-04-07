@@ -315,6 +315,8 @@ func newRoutingPolicyInternal(name string, scorerConfigs []ScorerConfig, blockSi
 		return newAdaptiveScoringV2(int(blockSize), rng, cacheFn)
 	case "adaptive-v3":
 		return newAdaptiveScoringV3(int(blockSize), rng, cacheFn)
+	case "adaptive-golden":
+		return newAdaptiveScoringGolden(int(blockSize), rng, cacheFn)
 	case "always-busiest":
 		return &AlwaysBusiest{}
 	default:

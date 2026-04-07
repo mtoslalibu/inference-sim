@@ -172,25 +172,38 @@ def main():
         print("No results found!")
         sys.exit(1)
 
-    # Table 1: Golden vs Baseline (primary result)
+    # Table 1: Golden vs Baseline
     print_comparison(data, "baseline-211", "adaptive-golden",
                      "Golden (5-scorer adaptive) vs Baseline 2:1:1")
 
-    # Table 2: Golden vs v2 (incremental improvement)
+    # Table 2: v2 vs Baseline
+    print_comparison(data, "baseline-211", "adaptive-v2",
+                     "Adaptive-v2 (3-scorer) vs Baseline 2:1:1")
+
+    # Table 3: Glia vs Baseline
+    print_comparison(data, "baseline-211", "glia",
+                     "Glia HRA (headroom allocator) vs Baseline 2:1:1")
+
+    # Table 4: Golden vs v2
     print_comparison(data, "adaptive-v2", "adaptive-golden",
                      "Golden vs Adaptive-v2 (does active-requests + running-requests help?)")
 
-    # Table 3: v2 vs Baseline (reference)
-    print_comparison(data, "baseline-211", "adaptive-v2",
-                     "Adaptive-v2 vs Baseline 2:1:1 (reference)")
+    # Table 5: Golden vs Glia
+    print_comparison(data, "glia", "adaptive-golden",
+                     "Golden vs Glia HRA")
+
+    # Table 6: v2 vs Glia
+    print_comparison(data, "glia", "adaptive-v2",
+                     "Adaptive-v2 vs Glia HRA")
 
     print("=" * 80)
     print("  SUMMARY")
     print("=" * 80)
     print()
-    print("  Golden adds active-requests (synchronous, llm-d #957) and")
-    print("  running-requests (batch size, GIE #956) to v2's regime detection.")
-    print("  Key question: do more signals improve over v2's simpler 3-scorer design?")
+    print("  4 policies compared: baseline-211, adaptive-v2, adaptive-golden, glia")
+    print("  v2: 3-scorer regime-detection (ppc, load-aware, kvu)")
+    print("  Golden: 5-scorer regime-detection (+active-requests, +running-requests)")
+    print("  Glia: KV headroom projection (no scorer pipeline)")
     print()
 
 

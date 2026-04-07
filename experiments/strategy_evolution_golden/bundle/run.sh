@@ -28,6 +28,7 @@ POLICIES="
 baseline-211:policy_baseline_211.yaml
 adaptive-v2:policy_adaptive_v2.yaml
 adaptive-golden:policy_adaptive_golden.yaml
+glia:policy_glia.yaml
 "
 
 WORKLOADS="
@@ -50,7 +51,7 @@ echo "Instances:   $NUM_INSTANCES"
 echo "Cache delay: ${CACHE_SIGNAL_DELAY}us (2s)"
 echo "Snapshot:    ${SNAPSHOT_REFRESH}us (5s)"
 echo "Seeds:       $SEEDS"
-echo "Runs:        63 (3 policies x 7 workloads x 3 seeds)"
+echo "Runs:        84 (4 policies x 7 workloads x 3 seeds)"
 echo ""
 
 echo "--- Building BLIS ---"

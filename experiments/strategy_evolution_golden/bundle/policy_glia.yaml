@@ -1,0 +1,7 @@
+admission:
+  policy: always-admit
+routing:
+  policy: glia
+priority:
+  policy: constant
+scheduler: fcfs

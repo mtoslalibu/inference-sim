@@ -31,7 +31,7 @@ The `weighted` routing policy is the most flexible. It combines multiple scoring
 | Scorer | What It Measures | llm-d Equivalent |
 |--------|-----------------|------------------|
 | `prefix-affinity` | Proportional prefix match ratio via router-side block hash cache | prefix-scorer |
-| `queue-depth` | Effective load: `QueueDepth + BatchSize + InFlightRequests` (min-max normalized) | queue-scorer |
+| `queue-depth` | Queue depth: `QueueDepth` only (min-max normalized) | queue-scorer |
 | `kv-utilization` | Inverse KV utilization: `1 - KVUtilization` | kv-cache-utilization-scorer |
 | `load-balance` | Inverse transform: `1 / (1 + effectiveLoad)` | BLIS-native (no llm-d equivalent) |
 
@@ -77,7 +77,7 @@ BLIS models three signal freshness tiers:
 At high request rates, many routing decisions occur between KV utilization updates (step time varies by model — ~6ms for Qwen3-14B / H100 / TP=1 at low load, longer under batch saturation). If using `kv-utilization:1` alone, all decisions within one step see the same stale utilization — this can cause severe load imbalance.
 
 !!! tip "Safe zone for `--snapshot-refresh-interval`"
-    Below **5ms** (~1 step time): no degradation. At 10ms: 14% TTFT p99 increase. At 100ms: +354%. The default composite profile (`prefix-affinity:3, queue-depth:2, kv-utilization:2`) is inherently resilient — queue-depth's Immediate signal corrects stale KV signals, mitigating ~99% of the effect.
+    Below **5ms** (~1 step time): no degradation. At 10ms: 14% TTFT p99 increase. At 100ms: +354%. The default composite profile (`prefix-affinity:3, queue-depth:2, kv-utilization:2`) is inherently resilient — queue-depth's load signal complements stale KV signals, mitigating ~99% of the effect.
 
 ## When to Use Which Policy
 

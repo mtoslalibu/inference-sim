@@ -176,15 +176,39 @@ func TestScoreQueueDepth_UniformLoad_AllScoreOne(t *testing.T) {
 	assert.Equal(t, 1.0, scores["b"])
 }
 
-func TestScoreQueueDepth_IncludesInFlightRequests(t *testing.T) {
+// TestScoreQueueDepth_IgnoresBatchSizeAndInFlight verifies BC-1:
+// GIVEN snapshots with identical QueueDepth but different BatchSize and InFlightRequests
+// WHEN scoreQueueDepth is called
+// THEN all instances score identically (BatchSize and InFlightRequests are ignored)
+func TestScoreQueueDepth_IgnoresBatchSizeAndInFlight(t *testing.T) {
 	snapshots := []RoutingSnapshot{
-		{ID: "a", QueueDepth: 0, InFlightRequests: 5}, // load=5
-		{ID: "b", QueueDepth: 5, InFlightRequests: 0}, // load=5
-		{ID: "c", QueueDepth: 0, InFlightRequests: 0}, // load=0 → best
+		{ID: "a", QueueDepth: 3, BatchSize: 0, InFlightRequests: 0},
+		{ID: "b", QueueDepth: 3, BatchSize: 10, InFlightRequests: 0},
+		{ID: "c", QueueDepth: 3, BatchSize: 0, InFlightRequests: 20},
+		{ID: "d", QueueDepth: 3, BatchSize: 10, InFlightRequests: 20},
 	}
 	scores := scoreQueueDepth(nil, snapshots)
-	assert.Equal(t, scores["a"], scores["b"], "equal effective load → equal score")
-	assert.Greater(t, scores["c"], scores["a"], "lower load → higher score")
+	// All have same QueueDepth → all score 1.0 (uniform case)
+	assert.Equal(t, 1.0, scores["a"])
+	assert.Equal(t, 1.0, scores["b"])
+	assert.Equal(t, 1.0, scores["c"])
+	assert.Equal(t, 1.0, scores["d"])
+}
+
+// TestScoreQueueDepth_OnlyQueueDepthAffectsScore verifies BC-1 with non-uniform QueueDepth:
+// GIVEN snapshots with different QueueDepth AND different BatchSize/InFlightRequests
+// WHEN scoreQueueDepth is called
+// THEN scores depend only on QueueDepth (min-max over QueueDepth)
+func TestScoreQueueDepth_OnlyQueueDepthAffectsScore(t *testing.T) {
+	snapshots := []RoutingSnapshot{
+		{ID: "a", QueueDepth: 10, BatchSize: 0, InFlightRequests: 0},   // highest QueueDepth
+		{ID: "b", QueueDepth: 0, BatchSize: 100, InFlightRequests: 50}, // lowest QueueDepth, huge batch+inflight
+	}
+	scores := scoreQueueDepth(nil, snapshots)
+	// "b" has QueueDepth=0 (min) → scores 1.0, despite having large BatchSize and InFlightRequests
+	assert.Equal(t, 1.0, scores["b"], "lowest QueueDepth should score 1.0 regardless of BatchSize/InFlightRequests")
+	// "a" has QueueDepth=10 (max) → scores 0.0, despite having zero BatchSize and InFlightRequests
+	assert.Equal(t, 0.0, scores["a"], "highest QueueDepth should score 0.0 regardless of BatchSize/InFlightRequests")
 }
 
 func TestScoreKVUtilization_InverseUtilization(t *testing.T) {

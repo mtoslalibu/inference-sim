@@ -1,0 +1,92 @@
+# FM-2b: Prefix Groups < Instances (2 groups across 4 instances)
+#
+# PURPOSE: When prefix groups are fewer than instances, 2:1:1 concentrates all
+# traffic on the 2 instances that cached the prefixes, leaving the other 2 idle.
+# The cache scorer has no reason to route to uncached instances.
+#
+# MECHANISM: 2 prefix groups, each getting 45% of traffic (90% total prefix).
+# With 4 instances, only 2 get cache hits. The ppc:2 weight drives 90% of
+# traffic to those 2 instances. The remaining 10% cold traffic spreads, but
+# 2 instances are heavily loaded and 2 are nearly idle.
+#
+# EXPECTED: 2:1:1 underutilizes 50% of capacity. Pure load-balance uses all 4
+# instances. Effect should be visible in both throughput and tail latency.
+#
+# RUN WITH: --num-instances 4
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 8.0
+num_requests: 1000
+
+clients:
+  # Prefix group A: 45% of traffic
+  - id: "prefix-group-a"
+    slo_class: "standard"
+    rate_fraction: 0.45
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "system-prompt-alpha"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 128
+        std_dev: 32
+        min: 16
+        max: 256
+
+  # Prefix group B: 45% of traffic
+  - id: "prefix-group-b"
+    slo_class: "standard"
+    rate_fraction: 0.45
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "system-prompt-beta"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 128
+        std_dev: 32
+        min: 16
+        max: 256
+
+  # Cold traffic: 10%, no prefix
+  - id: "cold-traffic"
+    slo_class: "standard"
+    rate_fraction: 0.10
+    streaming: true
+    arrival:
+      process: poisson
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 128
+        min: 32
+        max: 1024
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 128
+        std_dev: 64
+        min: 16
+        max: 512

@@ -1,0 +1,191 @@
+# FM-2a: Prefix Groups > Instances (7 groups across 4 instances)
+#
+# PURPOSE: No clean prefix-to-instance partition exists. The cache scorer creates
+# unstable affinity — requests from the same prefix group oscillate between
+# instances as cache state shifts, causing unnecessary prefill recomputation.
+#
+# MECHANISM: 7 equally-weighted prefix groups across 4 instances. Each instance
+# can cache ~2 groups. The 7th group (and partial overlaps) means the scorer
+# flip-flops. Every flip means a cache miss on an instance that *would* have
+# had the prefix if routing were stable.
+#
+# EXPECTED: 2:1:1 shows higher TTFT due to cache thrashing. Pure load-balance
+# avoids chasing unstable cache affinity.
+#
+# RUN WITH: --num-instances 4
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 8.0
+num_requests: 1000
+
+cohorts:
+  # 7 prefix groups, equal traffic share (~14.3% each)
+  - id: "prefix-group-1"
+    population: 1
+    rate_fraction: 0.143
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-1"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128
+
+  - id: "prefix-group-2"
+    population: 1
+    rate_fraction: 0.143
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-2"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128
+
+  - id: "prefix-group-3"
+    population: 1
+    rate_fraction: 0.143
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-3"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128
+
+  - id: "prefix-group-4"
+    population: 1
+    rate_fraction: 0.143
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-4"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128
+
+  - id: "prefix-group-5"
+    population: 1
+    rate_fraction: 0.143
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-5"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128
+
+  - id: "prefix-group-6"
+    population: 1
+    rate_fraction: 0.143
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-6"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128
+
+  - id: "prefix-group-7"
+    population: 1
+    rate_fraction: 0.002
+    slo_class: "standard"
+    streaming: true
+    arrival:
+      process: poisson
+    prefix_group: "doc-collection-7"
+    prefix_length: 16384
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 256
+        std_dev: 64
+        min: 64
+        max: 512
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 64
+        std_dev: 16
+        min: 8
+        max: 128

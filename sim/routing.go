@@ -309,6 +309,8 @@ func newRoutingPolicyInternal(name string, scorerConfigs []ScorerConfig, blockSi
 		}
 		weights := normalizeScorerWeights(scorerConfigs)
 		return &WeightedScoring{scorers: scorers, weights: weights, observers: observers, rng: rng}
+	case "adaptive":
+		return newAdaptiveScoring(int(blockSize), rng, cacheFn)
 	case "always-busiest":
 		return &AlwaysBusiest{}
 	default:

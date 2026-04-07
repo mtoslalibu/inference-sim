@@ -30,6 +30,7 @@ SEEDS="42 123 456"
 # Policies: "name:yaml_file" pairs
 POLICIES="
 baseline-211:policy_baseline_211.yaml
+adaptive:policy_adaptive.yaml
 lb-only:policy_lb_only.yaml
 no-kvu:policy_no_kvu.yaml
 ppc-heavy:policy_ppc_heavy.yaml

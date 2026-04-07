@@ -119,7 +119,7 @@ def main():
         print(f"\n{'Policy':<16} {'E2E Mean':>12} {'E2E P99':>12} {'TTFT Mean':>12} {'TTFT P99':>12} {'Seeds':>6}")
         print("-" * 76)
 
-        for policy in ["baseline-211", "lb-only", "no-kvu", "ppc-heavy", "qd-heavy"]:
+        for policy in ["baseline-211", "adaptive", "lb-only", "no-kvu", "ppc-heavy", "qd-heavy"]:
             if policy not in avg:
                 continue
             a = avg[policy]
@@ -133,7 +133,7 @@ def main():
             print(f"  {'Policy':<16} {'E2E Mean %':>12} {'E2E P99 %':>12} {'TTFT Mean %':>12} {'TTFT P99 %':>12}")
             print(f"  {'-'*68}")
 
-            for policy in ["lb-only", "no-kvu", "ppc-heavy", "qd-heavy"]:
+            for policy in ["adaptive", "lb-only", "no-kvu", "ppc-heavy", "qd-heavy"]:
                 if policy not in avg:
                     continue
                 a = avg[policy]
@@ -172,7 +172,7 @@ def main():
         bl_ttft_mean = statistics.mean([m["ttft_mean_ms"] for m in bl_seeds.values()])
         bl_ttft_p99 = statistics.mean([m["ttft_p99_ms"] for m in bl_seeds.values()])
 
-        for policy in ["lb-only", "no-kvu", "ppc-heavy", "qd-heavy"]:
+        for policy in ["adaptive", "lb-only", "no-kvu", "ppc-heavy", "qd-heavy"]:
             if policy not in data[wl]:
                 continue
             alt_seeds = data[wl][policy]

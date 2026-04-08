@@ -45,14 +45,31 @@ sim2real_golden/
 Static weighted scoring: `precise-prefix-cache:2, queue-depth:1, kv-utilization:1`.
 Uses stock BLIS `routing.go` — no file swap needed.
 
-**Known issue:** The 2:1 weight ratio between prefix-cache and queue-depth causes
-pile-on when a dominant prefix group routes all traffic to the cached instance.
-Under 5s stale snapshots, queue-depth can't counterbalance fast enough.
+**In plain English:** Every request gets routed to the instance with the best
+fixed-weight combination of "has my prefix cached" (weight 2) and "isn't too
+busy" (weight 1). The weights never change regardless of what's happening.
+
+**The problem:** Because the cache score is weighted 2x, it dominates. When many
+requests share a prefix, they all pile onto the one instance that cached it.
+The queue-depth signal updates every 5 seconds — too slow to push back against
+a sudden flood. The result is one overloaded instance and three idle ones.
 
 ### Adaptive-v2 (3-scorer regime detection)
 
 Replaces `WeightedScoring.Route()` with per-request regime detection using 3
 scorers: `precise-prefix-cache`, `load-aware`, `kv-utilization`.
+
+**In plain English:** Instead of fixed weights, this router looks at the current
+state of the cluster before each request and picks one of three strategies:
+- If cache hits are spread unevenly across instances, lean into cache affinity
+  (send the request where its prefix lives).
+- If memory is running low (>70% KV cache used), ignore the cache entirely and
+  just balance load — prevents piling onto a nearly-full instance.
+- Otherwise, just spread load evenly.
+
+**What it exploits that baseline misses:** The baseline blindly trusts a stale
+cache signal. Adaptive-v2 *checks whether the cache signal is worth following*
+before using it — and backs off to load-balancing when it isn't.
 
 **Regimes:**
 - **Cache-affinity** (cache spread > 0.1): ppc:4, load-aware:1 — lean into cache
@@ -71,6 +88,13 @@ Same regime detection as v2 but with two additional load signals:
 `active-requests` (synchronous InFlightRequests) and `running-requests`
 (min-max on BatchSize).
 
+**In plain English:** Same adaptive regime switching as v2, but with more eyes
+on the load. v2 only knows how deep each queue is. Expanded also knows how
+many requests are in-flight (dispatched but not queued yet) and how many are
+actively running in each batch. More load signals = finer-grained decisions,
+especially under bursty traffic where in-flight count reacts instantly while
+queue depth lags behind.
+
 **Regimes:**
 - **Cache-affinity**: ppc:4, active-requests:1, load-aware:1
 - **Memory-aware**: active-requests:2, load-aware:1, running-requests:1, kvu:1
@@ -83,12 +107,20 @@ Bigger TTFT wins on prefix-heavy workloads but slight FM-5 regression vs v2.
 Bypasses the scorer pipeline entirely. Projects KV-cache block usage for each
 instance after hypothetically placing the request:
 
+**In plain English:** Before routing, Glia asks "if I put this request here,
+how full will the GPU memory be?" It estimates how many KV-cache blocks the
+request will need, checks which instances have enough room, and picks the one
+with the most headroom. Instances that would run out of memory are penalized.
+
+**What it misses:** It has no awareness of prefix caching at all — it only cares
+about memory headroom. This makes it good at avoiding OOM-style preemptions but
+bad at reusing cached prefixes, which is why it loses badly on prefix-heavy
+workloads (FM-2a: -618% E2E P99).
+
 1. Estimate request blocks: `ceil(inputTokens * 1.6 / blockSize)`
 2. Estimate total/free blocks from `FreeKVBlocks` and `KVUtilization`
 3. Score: `-projectedUsage/totalBlocks - 0.001*queueLoad`
 4. Inadmissible instances (insufficient headroom) get -10.0 penalty
-
-No prefix-cache awareness — included as an external baseline comparison.
 
 ## Workloads
 
@@ -103,6 +135,24 @@ for clear gains, zero timeouts, and distinct failure mode coverage:
 | FM-3 | Burst Absorption | 3x burst spikes → stale snapshot pile-on | Best all-around gains on both E2E and TTFT (v2: +39% E2E P99, +22% TTFT). Clean runs, no timeouts. |
 | FM-6 | Cold Traffic Under KV Pressure | Long-context requests with 50% cold traffic | Dramatic TTFT P99 collapse: 2195ms → 115ms (v2: +95%). Mixed cold/warm traffic is production-realistic. |
 
+**FM-2a** — Imagine 7 different tenants (each with their own system prompt) sharing
+4 GPU instances. There aren't enough instances for each tenant to have their own,
+so the cache scorer keeps flip-flopping requests between instances, causing
+repeated cache misses. The adaptive routers detect this instability and fall back
+to load-balancing instead of chasing unstable cache hits.
+
+**FM-3** — Steady traffic with sudden 10x burst spikes. During a spike, all burst
+requests share one prefix, so the baseline piles them onto one instance (cache
+weight 2x beats queue-depth 1x). The queue-depth signal is 5 seconds stale, so
+it can't react in time. Adaptive routers use real-time in-flight counts to
+spread the burst across all instances immediately.
+
+**FM-6** — All requests are "cold" (no shared prefixes), with large context
+windows that eat up GPU memory fast. Since no prefix caching helps here, the
+cache scorer is useless — the real challenge is avoiding instances whose KV
+cache is nearly full. Adaptive routers detect memory pressure and route around
+nearly-full instances, preventing expensive preemptions.
+
 ### Extended Workloads (--all flag)
 
 | ID | Name | What it tests | Notes |
@@ -111,6 +161,26 @@ for clear gains, zero timeouts, and distinct failure mode coverage:
 | FM-2b | Groups < Instances | 2 prefix groups across 4 instances | Gains are smaller, less compelling for presentation |
 | FM-4 | Multi-Regime Phased | Warm-up → pressure → cooldown | Near-wash — no meaningful difference between algorithms |
 | FM-5 | Short Output | Classification workload (short outputs) | Expanded regresses on E2E/TTFT mean vs baseline |
+
+**FM-1** — Worst-case pile-on: 75% of all traffic shares one system prompt. The
+baseline sends nearly everything to whichever instance cached that prefix,
+starving the other 3. Adaptive routers detect the extreme imbalance and switch
+to load-balancing.
+
+**FM-2b** — Opposite of FM-2a: only 2 prefix groups across 4 instances. The
+baseline concentrates 90% of traffic on the 2 instances with cache hits, leaving
+the other 2 nearly idle. A simpler version of the same "cache-chasing wastes
+capacity" problem.
+
+**FM-4** — Traffic changes character over time: first prefix-heavy, then all cold,
+then mixed, then a new dominant prefix. Static 2:1:1 weights are a compromise
+that's suboptimal in every phase. In practice, the phases are long enough that
+the differences wash out.
+
+**FM-5** — Classification-style workload: 7 prefix groups but very short outputs
+(~8 tokens). Since the response is almost entirely TTFT (no long decode phase),
+any TTFT improvement should directly improve end-to-end latency. High request
+rate (60 req/s) stresses the system differently than the other workloads.
 
 All workloads use `slo_class: "standard"` and target Qwen/Qwen3-32B on H100 TP=1.
 
@@ -211,3 +281,27 @@ cd /path/to/blis && go build -o blis main.go
 | Snapshot refresh | 5s | Production-like staleness |
 | Seeds | 42, 123, 456 | 3 seeds for variance |
 | Timeout | 90s per run | Guards against preemption livelock (#963) |
+
+
+
+## sim2real options
+  Option A: Multi-profile with custom ProfileHandler (zero core changes)
+
+  llm-d already supports multiple named profiles with different weights. Define 3 profiles in YAML:
+
+  profiles:
+    - name: cache-affinity
+      scorers: [{name: precise-prefix-cache, weight: 4}, {name: load-aware, weight: 1}]
+    - name: memory-aware
+      scorers: [{name: load-aware, weight: 1}, {name: kv-utilization, weight: 1}]
+    - name: load-balance
+      scorers: [{name: load-aware, weight: 1}]
+
+  Then write a custom ProfileHandler that replaces SingleProfileHandler. Its Pick() method checks cacheSpread and avgKVUtil from endpoint state
+  and returns the matching profile. The ProfileHandler interface already exists for this exact use case.
+
+  Option B: Modify runScorerPlugins directly (surgical, 1 file)
+
+  Add regime detection before the weight accumulation loop in scheduler_profile.go:160-168. Compute cacheSpread/avgKVUtil from the endpoints,
+  select regime weights, and use those instead of scorer.Weight(). Same pattern as our BLIS router files — one function, clear markers.
+  

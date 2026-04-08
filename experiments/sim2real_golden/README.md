@@ -11,6 +11,7 @@ build, run. No other BLIS files need modification.
 - BLIS main branch with PRs #960 and #966 merged (scorers: load-aware,
   active-requests, running-requests, queue-depth reading QueueDepth only)
 - Go 1.22+, Python 3.8+
+- `matplotlib` (optional, for box plot figures: `pip install matplotlib`)
 
 ## Directory Structure
 
@@ -134,10 +135,19 @@ The script:
 
 Results are saved in `results/` as JSON metrics files.
 
-To analyze results separately:
+### Analyze Results
+
 ```bash
+# Tables only
 python3 analyze.py results
+
+# Tables + box plot figures (saved to results/figures/)
+python3 analyze.py results --figures
 ```
+
+Figures are per-workload 2x2 grids (E2E Mean, E2E P99, TTFT Mean, TTFT P99)
+with color-coded box plots per algorithm and % gain vs baseline annotated on
+each box. Green = better, red = worse, bold = 15%+ gain.
 
 ## Simulation Results (Core Workloads)
 

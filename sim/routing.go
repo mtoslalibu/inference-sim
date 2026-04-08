@@ -309,16 +309,6 @@ func newRoutingPolicyInternal(name string, scorerConfigs []ScorerConfig, blockSi
 		}
 		weights := normalizeScorerWeights(scorerConfigs)
 		return &WeightedScoring{scorers: scorers, weights: weights, observers: observers, rng: rng}
-	case "adaptive":
-		return newAdaptiveScoring(int(blockSize), rng, cacheFn)
-	case "adaptive-v2":
-		return newAdaptiveScoringV2(int(blockSize), rng, cacheFn)
-	case "adaptive-v3":
-		return newAdaptiveScoringV3(int(blockSize), rng, cacheFn)
-	case "adaptive-golden":
-		return newAdaptiveScoringGolden(int(blockSize), rng, cacheFn)
-	case "glia":
-		return &GliaHRA{rng: rng}
 	case "always-busiest":
 		return &AlwaysBusiest{}
 	default:

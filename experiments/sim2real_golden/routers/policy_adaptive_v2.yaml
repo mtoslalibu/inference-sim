@@ -1,0 +1,14 @@
+# Adaptive-v2 — 3-scorer regime-detection router.
+# Requires router_adaptive_v2.go swapped into sim/routing.go.
+# Scorer order MUST match the index mapping in the Route() method:
+#   0 = precise-prefix-cache, 1 = load-aware, 2 = kv-utilization
+# YAML weights are ignored at runtime (regime detection overrides them).
+routing:
+  policy: weighted
+  scorers:
+    - name: precise-prefix-cache
+      weight: 1
+    - name: load-aware
+      weight: 1
+    - name: kv-utilization
+      weight: 1

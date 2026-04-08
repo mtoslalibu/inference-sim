@@ -1,0 +1,19 @@
+# Adaptive-expanded (golden) — 5-scorer regime-detection router.
+# Requires router_adaptive_expanded.go swapped into sim/routing.go.
+# Scorer order MUST match the index mapping in the Route() method:
+#   0 = precise-prefix-cache, 1 = load-aware, 2 = active-requests,
+#   3 = running-requests, 4 = kv-utilization
+# YAML weights are ignored at runtime (regime detection overrides them).
+routing:
+  policy: weighted
+  scorers:
+    - name: precise-prefix-cache
+      weight: 1
+    - name: load-aware
+      weight: 1
+    - name: active-requests
+      weight: 1
+    - name: running-requests
+      weight: 1
+    - name: kv-utilization
+      weight: 1

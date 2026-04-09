@@ -26,15 +26,17 @@ WORKLOAD_NAMES = {
 
 WORKLOAD_ORDER = list(WORKLOAD_NAMES.keys())
 
-POLICY_ORDER = ["baseline-211", "adaptive-v2", "adaptive-expanded", "glia"]
+POLICY_ORDER = ["baseline-211", "baseline-322", "adaptive-v2", "adaptive-expanded", "glia"]
 POLICY_LABELS = {
     "baseline-211": "Baseline\n2:1:1",
+    "baseline-322": "Baseline\n3:2:2",
     "adaptive-v2": "Adaptive\nv2",
     "adaptive-expanded": "Adaptive\nExpanded",
     "glia": "Glia\nHRA",
 }
 POLICY_COLORS = {
     "baseline-211": "#7f8c8d",   # gray
+    "baseline-322": "#f39c12",   # orange
     "adaptive-v2": "#2ecc71",    # green
     "adaptive-expanded": "#3498db",  # blue
     "glia": "#e74c3c",          # red
@@ -373,12 +375,22 @@ def main():
         print_comparison(data, "baseline-211", "adaptive-expanded",
                          "Adaptive-expanded (5-scorer golden) vs Baseline 2:1:1")
 
-    # Table 2: Adaptive-v2 vs Baseline
+    # Table 2: Adaptive-v2 vs Baseline 2:1:1
     if "adaptive-v2" in all_policies:
         print_comparison(data, "baseline-211", "adaptive-v2",
                          "Adaptive-v2 (3-scorer) vs Baseline 2:1:1")
 
-    # Table 3: Glia vs Baseline
+    # Table 3: Baseline 3:2:2 vs Baseline 2:1:1
+    if "baseline-322" in all_policies:
+        print_comparison(data, "baseline-211", "baseline-322",
+                         "Baseline 3:2:2 vs Baseline 2:1:1 (heavier weights help?)")
+
+    # Table 4: Adaptive-v2 vs Baseline 3:2:2
+    if "adaptive-v2" in all_policies and "baseline-322" in all_policies:
+        print_comparison(data, "baseline-322", "adaptive-v2",
+                         "Adaptive-v2 vs Baseline 3:2:2")
+
+    # Table 5: Glia vs Baseline
     if "glia" in all_policies:
         print_comparison(data, "baseline-211", "glia",
                          "Glia HRA (headroom allocator) vs Baseline 2:1:1")
@@ -404,6 +416,7 @@ def main():
     print()
     print(f"  Policies compared: {sorted(all_policies)}")
     print("  baseline-211: ppc:2, queue-depth:1, kv-utilization:1 (llm-d default)")
+    print("  baseline-322: ppc:3, queue-depth:2, kv-utilization:2 (heavier weights)")
     print("  adaptive-v2: 3-scorer regime-detection (ppc, load-aware, kvu)")
     print("  adaptive-expanded: 5-scorer regime-detection (+active-requests, +running-requests)")
     print("  glia: KV headroom projection (no scorer pipeline)")

@@ -26,7 +26,7 @@ TP=1
 LATENCY_MODEL="trained-physics"
 NUM_INSTANCES=4
 CACHE_SIGNAL_DELAY=2000000      # 2s — matches llm-d defaultSpeculativeTTL
-SNAPSHOT_REFRESH=5000000         # 5s — stale snapshots (production-like)
+SNAPSHOT_REFRESH=50000           # 50ms — GAIE RefreshMetricsInterval default
 TIMEOUT_SECS=90
 
 SEEDS="42 123 456"
@@ -35,6 +35,7 @@ SEEDS="42 123 456"
 # "STOCK" means no file swap (use vanilla BLIS routing.go).
 ROUTERS="
 baseline-211:STOCK:policy_baseline_211.yaml
+baseline-322:STOCK:policy_baseline_322.yaml
 adaptive-v2:router_adaptive_v2.go:policy_adaptive_v2.yaml
 adaptive-expanded:router_adaptive_expanded.go:policy_adaptive_expanded.yaml
 glia:router_glia.go:policy_glia.yaml

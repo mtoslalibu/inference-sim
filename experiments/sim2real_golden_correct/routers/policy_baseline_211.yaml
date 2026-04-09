@@ -1,0 +1,12 @@
+# Baseline 2:1:1 — llm-d production default.
+# Uses stock BLIS routing.go (no router swap needed).
+# precise-prefix-cache:2, queue-depth:1, kv-utilization:1
+routing:
+  policy: weighted
+  scorers:
+    - name: precise-prefix-cache
+      weight: 2
+    - name: queue-depth
+      weight: 1
+    - name: kv-utilization
+      weight: 1

@@ -47,9 +47,9 @@ type RoutingSnapshot struct {
 	Model            string // Model served by this instance; used by buildRouterState() for per-model filtering
 	GPUType          string  // GPU hardware type (e.g. "A100-80GB"); populated by buildRouterState() from instance config
 	TPDegree         int     // Tensor-parallel degree; populated by buildRouterState() from instance config
-	CostPerHour            float64 // Node pool cost in $/hr; populated by buildRouterState() from NodePool.CostPerHour
-	TotalKvCapacityTokens  int64   // Total KV cache capacity in tokens
-	KvTokensInUse          int64   // KV cache tokens currently in use
+	CostPerHour           float64 // Node pool cost in $/hr; populated by buildRouterState() from NodePool.CostPerHour
+	TotalKvCapacityTokens int64   // Total KV cache capacity in tokens (TotalBlocks × BlockSizeTokens); used by V2SaturationAnalyzer
+	KvTokensInUse         int64   // Current KV cache occupancy in tokens (UsedBlocks × BlockSizeTokens); used by V2SaturationAnalyzer
 }
 
 // EffectiveLoad returns the total effective load on this instance:
@@ -74,7 +74,13 @@ type RoutingDecision struct {
 	TargetInstance string             // Instance ID to route to (must match a snapshot ID)
 	Reason         string             // Human-readable explanation
 	Scores         map[string]float64 // Instance ID → composite score (nil for policies without scoring)
-	Priority       float64
+	// Priority is a one-shot cluster-level priority hint applied before instance injection.
+	// Zero (default) means defer to instance-level PriorityPolicy entirely.
+	// Non-zero value sets req.Priority for initial queue ordering only — the instance-level
+	// PriorityPolicy recomputes priority each step, so this hint affects first-step scheduling
+	// but does not persist. This is intentional: it allows priority to evolve over time
+	// (e.g., SLOBasedPriority ages requests) while giving routing a way to influence initial placement.
+	Priority float64
 }
 
 // NewRoutingDecision creates a RoutingDecision with the given target and reason.

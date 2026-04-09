@@ -35,7 +35,7 @@ SEEDS="42 123 456"
 ROUTERS="
 baseline-211:STOCK:policy_baseline_211.yaml
 baseline-322:STOCK:policy_baseline_322.yaml
-adaptive-correct:router_adaptive_expanded.go:policy_adaptive_expanded.yaml
+adaptive:router_adaptive.go:policy_adaptive.yaml
 glia:router_glia.go:policy_glia.yaml
 "
 

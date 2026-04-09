@@ -263,11 +263,11 @@ sim2real_golden_correct/
   compare.sh                    # Main benchmark script (run this)
   analyze.py                    # Analysis + comparison tables
   routers/
-    router_adaptive_expanded.go # The adaptive algorithm (replaces sim/routing.go)
+    router_adaptive.go # The adaptive algorithm (replaces sim/routing.go)
     router_glia.go              # Glia HRA for comparison
     policy_baseline_211.yaml    # llm-d default: ppc:2, qd:1, kvu:1
     policy_baseline_322.yaml    # Heavier static: ppc:3, qd:2, kvu:2
-    policy_adaptive_expanded.yaml # 5 scorers (weights ignored, regime overrides)
+    policy_adaptive.yaml # 5 scorers (weights ignored, regime overrides)
     policy_glia.yaml            # Dummy scorer (glia bypasses pipeline)
   workloads/
     workload_fm3_burst.yaml     # Burst absorption

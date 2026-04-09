@@ -36,6 +36,7 @@ ROUTERS="
 baseline-211:STOCK:policy_baseline_211.yaml
 baseline-322:STOCK:policy_baseline_322.yaml
 adaptive-correct:router_adaptive_expanded.go:policy_adaptive_expanded.yaml
+glia:router_glia.go:policy_glia.yaml
 "
 
 CORE_WORKLOADS="

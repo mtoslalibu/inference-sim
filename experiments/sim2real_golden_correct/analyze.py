@@ -28,16 +28,18 @@ WORKLOAD_NAMES = {
 
 WORKLOAD_ORDER = list(WORKLOAD_NAMES.keys())
 
-POLICY_ORDER = ["baseline-211", "baseline-322", "adaptive-correct"]
+POLICY_ORDER = ["baseline-211", "baseline-322", "adaptive-correct", "glia"]
 POLICY_LABELS = {
     "baseline-211": "Baseline\n2:1:1",
     "baseline-322": "Baseline\n3:2:2",
     "adaptive-correct": "Adaptive\nCorrect",
+    "glia": "Glia\nHRA",
 }
 POLICY_COLORS = {
     "baseline-211": "#7f8c8d",   # gray
     "baseline-322": "#f39c12",   # orange
     "adaptive-correct": "#e74c3c",  # red
+    "glia": "#9b59b6",          # purple
 }
 
 METRIC_KEYS = [
@@ -378,7 +380,17 @@ def main():
         print_comparison(data, "baseline-322", "adaptive-correct",
                          "Adaptive-correct vs Baseline 3:2:2")
 
-    # Table 3: Baseline 3:2:2 vs 2:1:1
+    # Table 3: Glia vs Baseline 2:1:1
+    if "glia" in all_policies:
+        print_comparison(data, "baseline-211", "glia",
+                         "Glia HRA vs Baseline 2:1:1")
+
+    # Table 4: Adaptive-correct vs Glia
+    if "adaptive-correct" in all_policies and "glia" in all_policies:
+        print_comparison(data, "glia", "adaptive-correct",
+                         "Adaptive-correct vs Glia HRA")
+
+    # Table 5: Baseline 3:2:2 vs 2:1:1
     if "baseline-322" in all_policies:
         print_comparison(data, "baseline-211", "baseline-322",
                          "Baseline 3:2:2 vs Baseline 2:1:1 (weight tuning help?)")
@@ -391,6 +403,7 @@ def main():
     print("  baseline-211: ppc:2, queue-depth:1, kv-utilization:1 (llm-d default)")
     print("  baseline-322: ppc:3, queue-depth:2, kv-utilization:2 (heavier weights)")
     print("  adaptive-correct: 5-scorer regime-detection (ppc, la, ar, rr, kvu)")
+    print("  glia: KV headroom-aware routing (no scorer pipeline)")
     print()
 
     # Generate figures if requested

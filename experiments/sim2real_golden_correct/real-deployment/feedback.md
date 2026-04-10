@@ -24,19 +24,46 @@ that produces the simulation wins.
 | 3 | `running-requests` | `running-requests-size-scorer` | GAIE runner (auto-registered) | `RunningRequestsSize` from endpoint metrics |
 | 4 | `kv-utilization` | `kv-cache-utilization-scorer` | GAIE runner (auto-registered) | `KVCacheUsagePercent` (0.0-1.0 range) |
 
-### Important: load-aware is NOT the same as in simulation
+### Parity: load-aware IS the same in sim and real
 
-The sim's `load-aware` scorer computes `1/(1+QueueDepth+BatchSize+InFlightRequests)`.
-The real llm-d `load-aware-scorer` ONLY reads `WaitingQueueSize` (queue depth).
-It does NOT include BatchSize or InFlightRequests.
+Both use the same formula: `0.5 * (1 - queueDepth/128)`, range [0, 0.5].
 
-This is fine because the real system has separate scorers for each signal:
-- `load-aware-scorer` covers queue depth (WaitingQueueSize)
-- `active-request-scorer` covers in-flight requests (tracked by EPP)
-- `running-requests-size-scorer` covers running/batch requests (RunningRequestsSize)
+**BLIS sim** (`sim/routing_scorers.go:272-286`):
+```go
+const loadAwareQueueThreshold = 128  // Matches llm-d's QueueThresholdDefault
 
-The sim combined some of these into `load-aware` because its EffectiveLoad included all three.
-In production, keeping them separate is actually MORE faithful to the algorithm's intent.
+func scoreLoadAware(_ *Request, snapshots []RoutingSnapshot) map[string]float64 {
+    for _, snap := range snapshots {
+        if snap.QueueDepth == 0 {
+            scores[snap.ID] = 0.5
+        } else {
+            clamped := snap.QueueDepth
+            if clamped > loadAwareQueueThreshold { clamped = loadAwareQueueThreshold }
+            scores[snap.ID] = 0.5 * (1.0 - float64(clamped)/float64(loadAwareQueueThreshold))
+        }
+    }
+}
+```
+
+**Real llm-d** (`pkg/plugins/scorer/load_aware.go:83-99`):
+```go
+func (s *LoadAware) Score(..., endpoints []scheduling.Endpoint) map[scheduling.Endpoint]float64 {
+    for _, endpoint := range endpoints {
+        waitingRequests := float64(endpoint.GetMetrics().WaitingQueueSize)
+        if waitingRequests == 0 {
+            scoredEndpoints[endpoint] = 0.5
+        } else {
+            if waitingRequests > s.queueThreshold { waitingRequests = s.queueThreshold }
+            scoredEndpoints[endpoint] = 0.5 * (1.0 - (waitingRequests / s.queueThreshold))
+        }
+    }
+}
+```
+
+Identical logic. Both read queue depth only, both output [0, 0.5], both default to threshold 128.
+
+NOTE: BLIS also has a SEPARATE scorer called `load-balance` (`sim/routing_scorers.go:194-200`)
+that uses `1/(1+EffectiveLoad)`. That is NOT used by the adaptive algorithm. Don't confuse them.
 
 ---
 
@@ -331,23 +358,238 @@ differential weighting of the synchronous signal.
 
 ---
 
-## Scoring Function Differences from Simulation
+## Scorer Parity: Sim vs Real (Code Proof)
 
-These differences exist but should not affect regime detection or relative ordering:
+### Scorer 0: precise-prefix-cache — SAME (min-max normalization)
 
-| Scorer | Sim normalization | Real normalization |
-|--------|------------------|-------------------|
-| ppc | min-max across instances | min-max across endpoints |
-| load-aware | `1/(1+EffectiveLoad)` where EffectiveLoad=QD+BS+IFR | `0.5*(1-WaitingQueueSize/threshold)`, range [0, 0.5] |
-| active-requests | `1/(1+InFlightRequests)` | min-max of EPP-tracked in-flight counts |
-| running-requests | `1/(1+BatchSize)` | min-max of RunningRequestsSize |
-| kv-utilization | `1 - KVUtilization` | `1 - KVCacheUsagePercent` |
+Both compute min-max normalization of prefix cache hit counts across instances/endpoints.
+Output range: [0, 1].
 
-The real `load-aware-scorer` outputs in range [0, 0.5] while others output [0, 1.0].
-This effectively halves its contribution relative to other scorers. If this causes
-issues in practice, you can either:
-- Double its weight in the regime arrays (e.g., la:2 instead of la:1 in cache-affinity)
-- Or accept the difference since load-aware has lower weight than active-requests anyway
+### Scorer 1: load-aware — SAME (queue depth with threshold)
+
+Both use `0.5 * (1 - queueDepth/128)`. Output range: [0, 0.5].
+See code proof in the parity section above.
+
+Note: output range [0, 0.5] means load-aware naturally contributes half as much
+as other [0, 1] scorers at equal weight. This is by design in both sim and real.
+
+### Scorer 2: active-requests — DIFFERENT normalization, same intent
+
+**BLIS sim** (`sim/routing_scorers.go:202-255`):
+```go
+// max-only normalization: (maxCount - count) / maxCount
+// Zero in-flight = 1.0, all equal non-zero = 0.0
+func scoreActiveRequests(_ *Request, snapshots []RoutingSnapshot) map[string]float64 {
+    // ... finds maxIFR across all instances ...
+    for _, snap := range snapshots {
+        ifr := snap.InFlightRequests
+        if ifr == 0 { scores[snap.ID] = 1.0 }
+        else { scores[snap.ID] = float64(maxIFR-ifr) / float64(maxIFR) }
+    }
+}
+```
+
+**Real llm-d** (`pkg/plugins/scorer/active_request.go:191-230`):
+```go
+func (s *ActiveRequest) Score(...) map[scheduling.Endpoint]float64 {
+    // ... finds maxCount from EPP-tracked in-flight cache ...
+    for _, endpoint := range endpoints {
+        count := scoredEndpoints[endpointName]
+        if count <= s.idleThreshold { scoredEndpointsMap[endpoint] = 1.0 }
+        else { scoredEndpointsMap[endpoint] = float64(maxCount-count) / float64(maxCount) * s.maxBusyScore }
+    }
+}
+```
+
+Same normalization pattern (max-only). Real version adds `idleThreshold` and `maxBusyScore`
+knobs (default to 0 and 1.0 = identical to sim behavior).
+
+Key difference: sim reads `InFlightRequests` from snapshot (periodic). Real version
+tracks requests itself via PreRequest/ResponseComplete hooks (fully synchronous, better).
+
+### Scorer 3: running-requests — DIFFERENT normalization, same intent
+
+**BLIS sim** (`sim/routing_scorers.go` — min-max of BatchSize):
+```go
+// min-max normalization: (max - value) / (max - min)
+// All equal = 1.0
+func scoreRunningRequests(_ *Request, snapshots []RoutingSnapshot) map[string]float64 {
+    // min-max of snap.BatchSize
+}
+```
+
+**Real GAIE** (`scorer/runningrequests/runningrequest.go:78-108`):
+```go
+// min-max normalization: (max - value) / (max - min)
+// All equal = 1.0
+func (s *RunningRequestsSizeScorer) Score(...) map[scheduling.Endpoint]float64 {
+    // min-max of endpoint.GetMetrics().RunningRequestsSize
+}
+```
+
+Same min-max normalization. Sim reads `BatchSize`, real reads `RunningRequestsSize`.
+These measure the same thing (requests currently being processed on the GPU).
+
+### Scorer 4: kv-utilization — SAME
+
+**BLIS sim** (`sim/routing_scorers.go`): `1 - snap.KVUtilization`
+**Real GAIE** (`scorer/kvcacheutilization/kvcache_utilization.go:79`): `1 - endpoint.GetMetrics().KVCacheUsagePercent`
+
+Both 0.0-1.0 range. Identical.
+
+---
+
+## Scorer Configuration Knobs (Code Proof)
+
+### precise-prefix-cache-scorer — HAS config (complex)
+
+Source: `llm-d-inference-scheduler/pkg/plugins/scorer/precise_prefix_cache.go:59-81`
+
+```go
+type PrecisePrefixCachePluginConfig struct {
+    TokenProcessorConfig *kvblock.TokenProcessorConfig `json:"tokenProcessorConfig"`
+    IndexerConfig        *kvcache.Config               `json:"indexerConfig"`
+    KVEventsConfig       *kvevents.Config              `json:"kvEventsConfig"`
+    SpeculativeIndexing  bool                          `json:"speculativeIndexing"`
+    SpeculativeTTL       string                        `json:"speculativeTTL"`
+}
+```
+
+Required parameters (no useful defaults):
+- `tokenProcessorConfig.blockSize` — MUST match vLLM block size (typically 64)
+- `indexerConfig.tokenizersPoolConfig` — tokenizer model and UDS socket
+- `kvEventsConfig.zmqEndpoint` — ZMQ endpoint for KV cache events
+
+Optional:
+- `speculativeIndexing` (default false, recommend true)
+- `speculativeTTL` (default "2s" when speculative enabled)
+- `kvEventsConfig.topicFilter` (default "", use "kv@" for filtering)
+- `kvEventsConfig.concurrency` (default 1, recommend 4)
+- `kvEventsConfig.discoverPods` (default true, set false if using explicit config)
+- `indexerConfig.speculativeIndexing` (also settable at indexer level)
+
+Reference config from llm-d guide (https://github.com/llm-d/llm-d/blob/main/guides/precise-prefix-cache-aware/gaie-kv-events/values.yaml):
+```yaml
+- type: precise-prefix-cache-scorer
+  name: ppc
+  parameters:
+    tokenProcessorConfig:
+      blockSize: 64
+    indexerConfig:
+      speculativeIndexing: true
+      tokenizersPoolConfig:
+        modelName: Qwen/Qwen3-32B
+        uds:
+          socketFile: /tmp/tokenizer/tokenizer-uds.socket
+    kvEventsConfig:
+      topicFilter: "kv@"
+      concurrency: 4
+      discoverPods: false
+      zmqEndpoint: "tcp://*:5557"
+```
+
+Also needs tokenizer sidecar plugin BEFORE it in the plugins list:
+```yaml
+- type: tokenizer
+  parameters:
+    modelName: "${MODEL_NAME}"
+    udsTokenizerConfig:
+      socketFile: /tmp/tokenizer/tokenizer-uds.socket
+```
+
+### load-aware-scorer — HAS config (simple)
+
+Source: `llm-d-inference-scheduler/pkg/plugins/scorer/load_aware.go:22-24`
+
+```go
+type loadAwareParameters struct {
+    Threshold int `json:"threshold"`   // default: 128 (QueueThresholdDefault)
+}
+```
+
+One parameter:
+- `threshold` — queue depth at which score becomes 0. Default 128.
+
+YAML (defaults are fine, no parameters needed):
+```yaml
+- type: load-aware-scorer
+  name: la
+  # parameters:          # optional
+  #   threshold: 128     # default, only change if you know your queue behavior
+```
+
+### active-request-scorer — HAS config (simple)
+
+Source: `llm-d-inference-scheduler/pkg/plugins/scorer/active_request.go:29-51`
+
+```go
+type ActiveRequestParameters struct {
+    RequestTimeout string  `json:"requestTimeout"`  // default: "2m"
+    IdleThreshold  int     `json:"idleThreshold"`   // default: 0
+    MaxBusyScore   float64 `json:"maxBusyScore"`    // default: 1.0
+}
+```
+
+Three parameters:
+- `requestTimeout` — how long before an in-flight request is considered stale. Default "2m".
+- `idleThreshold` — pods with <= this many requests score 1.0. Default 0 (only zero = idle).
+- `maxBusyScore` — max score for busy pods. Default 1.0. Lower values create a gap between idle and busy.
+
+YAML (defaults are fine, no parameters needed):
+```yaml
+- type: active-request-scorer
+  name: ar
+  # parameters:              # optional
+  #   requestTimeout: "2m"   # default
+  #   idleThreshold: 0       # default
+  #   maxBusyScore: 1.0      # default
+```
+
+### running-requests-size-scorer — NO config
+
+Source: `gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/runningrequests/runningrequest.go:37`
+
+```go
+func RunningRequestsSizeScorerFactory(name string, _ json.RawMessage, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
+    return NewRunningRequestsSizeScorer().WithName(name), nil
+}
+```
+
+Factory ignores `json.RawMessage` parameter entirely. No config knobs.
+
+YAML:
+```yaml
+- type: running-requests-size-scorer
+  name: rr
+```
+
+### kv-cache-utilization-scorer — NO config
+
+Source: `gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/kvcacheutilization/kvcache_utilization.go:36`
+
+```go
+func KvCacheUtilizationScorerFactory(name string, _ json.RawMessage, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
+    return NewKVCacheUtilizationScorer().WithName(name), nil
+}
+```
+
+Factory ignores `json.RawMessage` parameter entirely. No config knobs.
+
+YAML:
+```yaml
+- type: kv-cache-utilization-scorer
+  name: kvu
+```
+
+### Summary of config needs
+
+| Scorer | Has config? | Needs explicit config? |
+|--------|------------|----------------------|
+| precise-prefix-cache-scorer | Yes (complex) | YES — blockSize, ZMQ, tokenizer required |
+| load-aware-scorer | Yes (1 param) | No — default threshold=128 is fine |
+| active-request-scorer | Yes (3 params) | No — defaults match sim behavior |
+| running-requests-size-scorer | No | No |
+| kv-cache-utilization-scorer | No | No |
 
 ---
 

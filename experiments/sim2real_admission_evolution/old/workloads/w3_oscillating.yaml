@@ -1,0 +1,586 @@
+# Workload 3: Oscillating Load
+#
+# PURPOSE: Repeated oscillation between overload and recovery. Tests hysteresis
+# and load trajectory awareness. Baseline flaps between admit-all and reject-all
+# every cycle — no smoothing.
+#
+# PATTERN:
+#   Warm-up (0-10s): 4 req/s steady
+#   Oscillation (10-80s): [5s at 16 req/s, 5s at 2 req/s] x 7 cycles
+#   Cool-down (80-90s): 3 req/s steady
+#
+# Average load across oscillation ~9 req/s (near 4-instance capacity).
+# Uniform request shapes across tiers.
+#
+# TIER MIX: critical 20%, standard 30%, sheddable 30%, batch 20%
+#
+# BASELINE WEAKNESS: GAIE legacy has no hysteresis/EMA. It flaps between
+# full-admit and full-reject on every 5s cycle. Evolved algo with smoothing
+# maintains steady moderate shedding rate = higher sustained goodput.
+#
+# RUN WITH: --num-instances 4 --routing-policy round-robin --snapshot-refresh-interval 50000
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 3000.0
+num_requests: 0
+horizon: 90000000  # 90 seconds
+
+clients:
+  # === WARM-UP (0-10s): 4 req/s ===
+  - id: "warmup-critical"
+    slo_class: "critical"
+    rate_fraction: 0.08     # 0.4 * 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 10000000}]}
+
+  - id: "warmup-standard"
+    slo_class: "standard"
+    rate_fraction: 0.12
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 10000000}]}
+
+  - id: "warmup-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.12
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 10000000}]}
+
+  - id: "warmup-batch"
+    slo_class: "batch"
+    rate_fraction: 0.08
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 10000000}]}
+
+  # === OSCILLATION HIGH phases: 16 req/s for 5s each, 7 cycles ===
+  # Cycle 1 high: 10-15s, Cycle 2 high: 20-25s, ... Cycle 7 high: 70-75s
+
+  # -- Cycle 1 HIGH (10-15s) --
+  - id: "osc1h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 10000000, end_us: 15000000}]}
+
+  - id: "osc1h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 10000000, end_us: 15000000}]}
+
+  - id: "osc1h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 10000000, end_us: 15000000}]}
+
+  - id: "osc1h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 10000000, end_us: 15000000}]}
+
+  # -- Cycle 1 LOW (15-20s) --
+  - id: "osc1l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 15000000, end_us: 20000000}]}
+
+  - id: "osc1l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 15000000, end_us: 20000000}]}
+
+  - id: "osc1l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 15000000, end_us: 20000000}]}
+
+  - id: "osc1l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 15000000, end_us: 20000000}]}
+
+  # -- Cycles 2-7: same pattern repeating every 10s --
+  # Cycle 2 HIGH (20-25s)
+  - id: "osc2h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 25000000}]}
+  - id: "osc2h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 25000000}]}
+  - id: "osc2h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 25000000}]}
+  - id: "osc2h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 25000000}]}
+
+  # Cycle 2 LOW (25-30s)
+  - id: "osc2l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 25000000, end_us: 30000000}]}
+  - id: "osc2l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 25000000, end_us: 30000000}]}
+  - id: "osc2l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 25000000, end_us: 30000000}]}
+  - id: "osc2l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 25000000, end_us: 30000000}]}
+
+  # Cycle 3 HIGH (30-35s)
+  - id: "osc3h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 30000000, end_us: 35000000}]}
+  - id: "osc3h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 30000000, end_us: 35000000}]}
+  - id: "osc3h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 30000000, end_us: 35000000}]}
+  - id: "osc3h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 30000000, end_us: 35000000}]}
+
+  # Cycle 3 LOW (35-40s)
+  - id: "osc3l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 35000000, end_us: 40000000}]}
+  - id: "osc3l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 35000000, end_us: 40000000}]}
+  - id: "osc3l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 35000000, end_us: 40000000}]}
+  - id: "osc3l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 35000000, end_us: 40000000}]}
+
+  # Cycle 4 HIGH (40-45s)
+  - id: "osc4h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 40000000, end_us: 45000000}]}
+  - id: "osc4h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 40000000, end_us: 45000000}]}
+  - id: "osc4h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 40000000, end_us: 45000000}]}
+  - id: "osc4h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 40000000, end_us: 45000000}]}
+
+  # Cycle 4 LOW (45-50s)
+  - id: "osc4l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 45000000, end_us: 50000000}]}
+  - id: "osc4l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 45000000, end_us: 50000000}]}
+  - id: "osc4l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 45000000, end_us: 50000000}]}
+  - id: "osc4l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 45000000, end_us: 50000000}]}
+
+  # Cycle 5 HIGH (50-55s)
+  - id: "osc5h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 50000000, end_us: 55000000}]}
+  - id: "osc5h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 50000000, end_us: 55000000}]}
+  - id: "osc5h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 50000000, end_us: 55000000}]}
+  - id: "osc5h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 50000000, end_us: 55000000}]}
+
+  # Cycle 5 LOW (55-60s)
+  - id: "osc5l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 55000000, end_us: 60000000}]}
+  - id: "osc5l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 55000000, end_us: 60000000}]}
+  - id: "osc5l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 55000000, end_us: 60000000}]}
+  - id: "osc5l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 55000000, end_us: 60000000}]}
+
+  # Cycle 6 HIGH (60-65s)
+  - id: "osc6h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 60000000, end_us: 65000000}]}
+  - id: "osc6h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 60000000, end_us: 65000000}]}
+  - id: "osc6h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 60000000, end_us: 65000000}]}
+  - id: "osc6h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 60000000, end_us: 65000000}]}
+
+  # Cycle 6 LOW (65-70s)
+  - id: "osc6l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 65000000, end_us: 70000000}]}
+  - id: "osc6l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 65000000, end_us: 70000000}]}
+  - id: "osc6l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 65000000, end_us: 70000000}]}
+  - id: "osc6l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 65000000, end_us: 70000000}]}
+
+  # Cycle 7 HIGH (70-75s)
+  - id: "osc7h-critical"
+    slo_class: "critical"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 75000000}]}
+  - id: "osc7h-standard"
+    slo_class: "standard"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 75000000}]}
+  - id: "osc7h-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.48
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 75000000}]}
+  - id: "osc7h-batch"
+    slo_class: "batch"
+    rate_fraction: 0.32
+    streaming: true
+    arrival: {process: gamma, cv: 4.0}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 75000000}]}
+
+  # Cycle 7 LOW (75-80s)
+  - id: "osc7l-critical"
+    slo_class: "critical"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 75000000, end_us: 80000000}]}
+  - id: "osc7l-standard"
+    slo_class: "standard"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 75000000, end_us: 80000000}]}
+  - id: "osc7l-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 75000000, end_us: 80000000}]}
+  - id: "osc7l-batch"
+    slo_class: "batch"
+    rate_fraction: 0.04
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 75000000, end_us: 80000000}]}
+
+  # === COOL-DOWN (80-90s): 3 req/s ===
+  - id: "cool-critical"
+    slo_class: "critical"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 80000000, end_us: 90000000}]}
+  - id: "cool-standard"
+    slo_class: "standard"
+    rate_fraction: 0.09
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 80000000, end_us: 90000000}]}
+  - id: "cool-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.09
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 80000000, end_us: 90000000}]}
+  - id: "cool-batch"
+    slo_class: "batch"
+    rate_fraction: 0.06
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 80000000, end_us: 90000000}]}

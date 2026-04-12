@@ -49,7 +49,7 @@ func TestPrintPerSLOMetrics_MultipleClasses_PrintsSorted(t *testing.T) {
 	}
 
 	// WHEN we print per-SLO metrics
-	printPerSLOMetrics(&buf, sloMetrics)
+	printPerSLOMetrics(&buf, sloMetrics, nil)
 
 	// THEN output must contain the section and classes in sorted order
 	output := buf.String()
@@ -71,7 +71,7 @@ func TestPrintPerSLOMetrics_SingleClass_NoOutput(t *testing.T) {
 	}
 
 	// WHEN we print per-SLO metrics
-	printPerSLOMetrics(&buf, sloMetrics)
+	printPerSLOMetrics(&buf, sloMetrics, nil)
 
 	// THEN no output (single class = no differentiation)
 	assert.Empty(t, buf.String())

@@ -252,6 +252,110 @@ func (g *GAIELegacyAdmission) saturation(snapshots []RoutingSnapshot) float64 {
 	return total / float64(len(snapshots))
 }
 
+// AdaptiveAdmission is the evolved admission policy discovered via BLIS simulation (iter11).
+// Uses the same GAIE saturation formula but with ultra-low probabilistic shedding thresholds
+// instead of a binary cliff at saturation=1.0.
+// Model-agnostic: same thresholds work for Qwen3-14B and Qwen3-32B.
+type AdaptiveAdmission struct {
+	QDThreshold float64
+	KVThreshold float64
+	PriorityMap *SLOPriorityMap
+
+	SheddableShedStart float64 // saturation to begin sheddable shedding (0.01)
+	SheddableShedFull  float64 // saturation for p=1.0 sheddable shedding (0.10)
+	BatchShedStart     float64 // saturation to begin batch shedding (0.005)
+	BatchShedFull      float64 // saturation for p=1.0 batch shedding (0.05)
+
+	totalAdmitted int
+	totalRejected int
+}
+
+// NewAdaptiveAdmission creates an AdaptiveAdmission with GAIE-compatible defaults.
+func NewAdaptiveAdmission(qdThreshold, kvThreshold float64, priorityMap *SLOPriorityMap) *AdaptiveAdmission {
+	if qdThreshold <= 0 {
+		qdThreshold = 5.0
+	}
+	if kvThreshold <= 0 || kvThreshold > 1.0 {
+		kvThreshold = 0.8
+	}
+	if priorityMap == nil {
+		priorityMap = DefaultSLOPriorityMap()
+	}
+	return &AdaptiveAdmission{
+		QDThreshold:        qdThreshold,
+		KVThreshold:        kvThreshold,
+		PriorityMap:        priorityMap,
+		SheddableShedStart: 0.01,
+		SheddableShedFull:  0.10,
+		BatchShedStart:     0.005,
+		BatchShedFull:      0.05,
+	}
+}
+
+// Admit implements AdmissionPolicy. Non-sheddable requests always pass.
+// Sheddable/batch requests are probabilistically rejected based on saturation.
+// EVOLVE-BLOCK-START (iter11)
+func (a *AdaptiveAdmission) Admit(req *Request, state *RouterState) (bool, string) {
+	priority := a.PriorityMap.Priority(req.SLOClass)
+	if priority >= 0 {
+		a.totalAdmitted++
+		return true, ""
+	}
+
+	// GAIE saturation: avg(max(QD/qdT, KV/kvT))
+	saturation := 0.0
+	n := len(state.Snapshots)
+	if n > 0 {
+		for _, snap := range state.Snapshots {
+			qRatio := float64(snap.QueueDepth) / a.QDThreshold
+			kvRatio := snap.KVUtilization / a.KVThreshold
+			if qRatio > kvRatio {
+				saturation += qRatio
+			} else {
+				saturation += kvRatio
+			}
+		}
+		saturation /= float64(n)
+	}
+
+	// Deterministic pseudo-random for reproducibility
+	requestOrdinal := float64(a.totalAdmitted+a.totalRejected) / 100.0
+	randVal := requestOrdinal - float64(int(requestOrdinal))
+
+	// Sheddable ramp
+	if a.PriorityMap.Priority(req.SLOClass) >= -2 && a.PriorityMap.Priority(req.SLOClass) < 0 {
+		if saturation >= a.SheddableShedStart {
+			p := (saturation - a.SheddableShedStart) / (a.SheddableShedFull - a.SheddableShedStart)
+			if p > 1.0 {
+				p = 1.0
+			}
+			if randVal < p {
+				a.totalRejected++
+				return false, fmt.Sprintf("adaptive-shed: class=%s sat=%.3f p=%.3f", req.SLOClass, saturation, p)
+			}
+		}
+	}
+
+	// Batch ramp
+	if a.PriorityMap.Priority(req.SLOClass) <= -3 {
+		if saturation >= a.BatchShedStart {
+			p := (saturation - a.BatchShedStart) / (a.BatchShedFull - a.BatchShedStart)
+			if p > 1.0 {
+				p = 1.0
+			}
+			if randVal < p {
+				a.totalRejected++
+				return false, fmt.Sprintf("adaptive-shed: class=%s sat=%.3f p=%.3f", req.SLOClass, saturation, p)
+			}
+		}
+	}
+
+	a.totalAdmitted++
+	return true, ""
+}
+
+// EVOLVE-BLOCK-END
+
 // NewAdmissionPolicy creates an admission policy by name.
 // Valid names are defined in ValidAdmissionPolicies (bundle.go).
 // An empty string defaults to AlwaysAdmit (for CLI flag default compatibility).
@@ -272,6 +376,8 @@ func NewAdmissionPolicy(name string, capacity, refillRate float64) AdmissionPoli
 		panic("tier-shed requires NewTierShedAdmission; cannot use generic factory")
 	case "gaie-legacy":
 		panic("gaie-legacy requires NewGAIELegacyAdmission; cannot use generic factory")
+	case "adaptive-admission":
+		panic("adaptive-admission requires NewAdaptiveAdmission; cannot use generic factory")
 	default:
 		panic(fmt.Sprintf("unhandled admission policy %q", name))
 	}

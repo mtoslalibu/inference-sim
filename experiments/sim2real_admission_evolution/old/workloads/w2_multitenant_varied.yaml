@@ -1,0 +1,440 @@
+# Workload 2: Multi-Tenant with Varied Shapes
+#
+# PURPOSE: 4 tenants, one sends 3x more. Sustained ~1.1 saturation. Tests fairness
+# and token-aware shedding. Different request shapes per SLO tier.
+#
+# PHASES:
+#   Ramp-up   (0-20s):  ~6 req/s aggregate
+#   Sustained (20-70s): ~11 req/s, cluster at ~1.1 saturation
+#   Cool-down (70-90s): ~4 req/s
+#
+# TIER MIX: critical 15%, standard 30%, sheddable 30%, batch 25%
+# TENANTS: A=45% (heavy), B=20%, C=20%, D=15%
+# TOKEN LENGTHS: critical=short(128-256), standard/sheddable=medium(256-512), batch=long(1024-2048)
+#
+# BASELINE WEAKNESS: GAIE legacy ignores tenant ID and token length.
+# Sheds all priority<0 equally regardless of who sent it or how expensive it is.
+#
+# RUN WITH: --num-instances 4 --routing-policy round-robin --snapshot-refresh-interval 50000
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 500.0
+num_requests: 0
+horizon: 90000000  # 90 seconds
+
+clients:
+  # === RAMP-UP PHASE (0-20s): ~6 req/s ===
+  # 0.6 * 10 = 6 req/s. Split across 4 tenants x 4 tiers = 16 clients.
+  # Tenant A gets 45% of each tier's allocation.
+
+  # -- Tenant A (heavy: 45% of traffic) --
+  - id: "ramp-A-critical"
+    tenant_id: "tenant-A"
+    slo_class: "critical"
+    rate_fraction: 0.0405   # 0.6 * 0.15 * 0.45
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-A-standard"
+    tenant_id: "tenant-A"
+    slo_class: "standard"
+    rate_fraction: 0.081    # 0.6 * 0.30 * 0.45
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-A-sheddable"
+    tenant_id: "tenant-A"
+    slo_class: "sheddable"
+    rate_fraction: 0.081    # 0.6 * 0.30 * 0.45
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-A-batch"
+    tenant_id: "tenant-A"
+    slo_class: "batch"
+    rate_fraction: 0.0675   # 0.6 * 0.25 * 0.45
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  # -- Tenant B (20% of traffic) --
+  - id: "ramp-B-critical"
+    tenant_id: "tenant-B"
+    slo_class: "critical"
+    rate_fraction: 0.018    # 0.6 * 0.15 * 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-B-standard"
+    tenant_id: "tenant-B"
+    slo_class: "standard"
+    rate_fraction: 0.036    # 0.6 * 0.30 * 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-B-sheddable"
+    tenant_id: "tenant-B"
+    slo_class: "sheddable"
+    rate_fraction: 0.036    # 0.6 * 0.30 * 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-B-batch"
+    tenant_id: "tenant-B"
+    slo_class: "batch"
+    rate_fraction: 0.03     # 0.6 * 0.25 * 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  # -- Tenant C (20% of traffic) --
+  - id: "ramp-C-critical"
+    tenant_id: "tenant-C"
+    slo_class: "critical"
+    rate_fraction: 0.018
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-C-standard"
+    tenant_id: "tenant-C"
+    slo_class: "standard"
+    rate_fraction: 0.036
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-C-sheddable"
+    tenant_id: "tenant-C"
+    slo_class: "sheddable"
+    rate_fraction: 0.036
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-C-batch"
+    tenant_id: "tenant-C"
+    slo_class: "batch"
+    rate_fraction: 0.03
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  # -- Tenant D (15% of traffic) --
+  - id: "ramp-D-critical"
+    tenant_id: "tenant-D"
+    slo_class: "critical"
+    rate_fraction: 0.0135
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-D-standard"
+    tenant_id: "tenant-D"
+    slo_class: "standard"
+    rate_fraction: 0.027
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-D-sheddable"
+    tenant_id: "tenant-D"
+    slo_class: "sheddable"
+    rate_fraction: 0.027
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  - id: "ramp-D-batch"
+    tenant_id: "tenant-D"
+    slo_class: "batch"
+    rate_fraction: 0.0225
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 0, end_us: 20000000}]}
+
+  # === SUSTAINED PHASE (20-70s): ~11 req/s ===
+  # 1.1 * 10 = 11 req/s. Same tenant/tier distribution.
+
+  # -- Tenant A (heavy: 45%) --
+  - id: "sust-A-critical"
+    tenant_id: "tenant-A"
+    slo_class: "critical"
+    rate_fraction: 0.07425  # 1.1 * 0.15 * 0.45
+    streaming: true
+    arrival: {process: gamma, cv: 3.0}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-A-standard"
+    tenant_id: "tenant-A"
+    slo_class: "standard"
+    rate_fraction: 0.1485
+    streaming: true
+    arrival: {process: gamma, cv: 3.0}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-A-sheddable"
+    tenant_id: "tenant-A"
+    slo_class: "sheddable"
+    rate_fraction: 0.1485
+    streaming: true
+    arrival: {process: gamma, cv: 3.0}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-A-batch"
+    tenant_id: "tenant-A"
+    slo_class: "batch"
+    rate_fraction: 0.12375
+    streaming: true
+    arrival: {process: gamma, cv: 3.0}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  # -- Tenant B (20%) --
+  - id: "sust-B-critical"
+    tenant_id: "tenant-B"
+    slo_class: "critical"
+    rate_fraction: 0.033
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-B-standard"
+    tenant_id: "tenant-B"
+    slo_class: "standard"
+    rate_fraction: 0.066
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-B-sheddable"
+    tenant_id: "tenant-B"
+    slo_class: "sheddable"
+    rate_fraction: 0.066
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-B-batch"
+    tenant_id: "tenant-B"
+    slo_class: "batch"
+    rate_fraction: 0.055
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  # -- Tenant C (20%) --
+  - id: "sust-C-critical"
+    tenant_id: "tenant-C"
+    slo_class: "critical"
+    rate_fraction: 0.033
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-C-standard"
+    tenant_id: "tenant-C"
+    slo_class: "standard"
+    rate_fraction: 0.066
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-C-sheddable"
+    tenant_id: "tenant-C"
+    slo_class: "sheddable"
+    rate_fraction: 0.066
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-C-batch"
+    tenant_id: "tenant-C"
+    slo_class: "batch"
+    rate_fraction: 0.055
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  # -- Tenant D (15%) --
+  - id: "sust-D-critical"
+    tenant_id: "tenant-D"
+    slo_class: "critical"
+    rate_fraction: 0.02475
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-D-standard"
+    tenant_id: "tenant-D"
+    slo_class: "standard"
+    rate_fraction: 0.0495
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-D-sheddable"
+    tenant_id: "tenant-D"
+    slo_class: "sheddable"
+    rate_fraction: 0.0495
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  - id: "sust-D-batch"
+    tenant_id: "tenant-D"
+    slo_class: "batch"
+    rate_fraction: 0.037125
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 20000000, end_us: 70000000}]}
+
+  # === COOL-DOWN PHASE (70-90s): ~4 req/s ===
+  # Simplified: just tenant-A drops back, others stay low. Single tier mix.
+
+  - id: "cool-A-critical"
+    tenant_id: "tenant-A"
+    slo_class: "critical"
+    rate_fraction: 0.027    # 0.4 * 0.15 * 0.45
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-A-standard"
+    tenant_id: "tenant-A"
+    slo_class: "standard"
+    rate_fraction: 0.054
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-A-sheddable"
+    tenant_id: "tenant-A"
+    slo_class: "sheddable"
+    rate_fraction: 0.054
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-A-batch"
+    tenant_id: "tenant-A"
+    slo_class: "batch"
+    rate_fraction: 0.045
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-BCD-critical"
+    slo_class: "critical"
+    rate_fraction: 0.033
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 192, std_dev: 32, min: 128, max: 256}}
+    output_distribution: {type: gaussian, params: {mean: 64, std_dev: 16, min: 8, max: 128}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-BCD-standard"
+    slo_class: "standard"
+    rate_fraction: 0.066
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-BCD-sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.066
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 384, std_dev: 64, min: 256, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}
+
+  - id: "cool-BCD-batch"
+    slo_class: "batch"
+    rate_fraction: 0.055
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1536, std_dev: 256, min: 1024, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+    lifecycle: {windows: [{start_us: 70000000, end_us: 90000000}]}

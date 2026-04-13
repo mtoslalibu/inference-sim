@@ -1,9 +1,0 @@
-routing:
-  policy: weighted
-  scorers:
-    - name: precise-prefix-cache
-      weight: 3
-    - name: queue-depth
-      weight: 2
-    - name: kv-utilization
-      weight: 2

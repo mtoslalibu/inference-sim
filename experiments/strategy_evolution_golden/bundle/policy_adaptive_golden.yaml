@@ -1,7 +1,0 @@
-admission:
-  policy: always-admit
-routing:
-  policy: adaptive-golden
-priority:
-  policy: constant
-scheduler: fcfs

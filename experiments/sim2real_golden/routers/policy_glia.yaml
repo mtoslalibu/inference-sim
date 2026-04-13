@@ -1,9 +1,0 @@
-# Glia HRA — KV-cache headroom projection router.
-# Requires router_glia.go swapped into sim/routing.go.
-# Dummy scorer: needed to trigger the "weighted" code path.
-# Route() ignores the scorer pipeline entirely.
-routing:
-  policy: weighted
-  scorers:
-    - name: queue-depth
-      weight: 1

@@ -252,63 +252,36 @@ func (g *GAIELegacyAdmission) saturation(snapshots []RoutingSnapshot) float64 {
 	return total / float64(len(snapshots))
 }
 
-// AdaptiveAdmission is the evolved admission policy discovered via BLIS simulation (iter11).
-// Uses the same GAIE saturation formula but with ultra-low probabilistic shedding thresholds
-// instead of a binary cliff at saturation=1.0.
-// Model-agnostic: same thresholds work for Qwen3-14B and Qwen3-32B.
+// AdaptiveAdmission implements the evolved admission policy (iter11) from BLIS simulation.
+// Uses the same GAIE saturation formula but with ultra-low probabilistic shedding thresholds.
+// Dispatches by SLO class name (not priority integer) to match the production translation.
+// Authoritative source: experiments/sim2real_admission_evolution/sim2real_bundle_14b/algorithm/admission.go
 type AdaptiveAdmission struct {
-	QDThreshold float64
-	KVThreshold float64
-	PriorityMap *SLOPriorityMap
-
-	SheddableShedStart float64 // saturation to begin sheddable shedding (0.01)
-	SheddableShedFull  float64 // saturation for p=1.0 sheddable shedding (0.10)
-	BatchShedStart     float64 // saturation to begin batch shedding (0.005)
-	BatchShedFull      float64 // saturation for p=1.0 batch shedding (0.05)
-
+	classCounters map[string]int
 	totalAdmitted int
 	totalRejected int
 }
 
-// NewAdaptiveAdmission creates an AdaptiveAdmission with GAIE-compatible defaults.
-func NewAdaptiveAdmission(qdThreshold, kvThreshold float64, priorityMap *SLOPriorityMap) *AdaptiveAdmission {
-	if qdThreshold <= 0 {
-		qdThreshold = 5.0
-	}
-	if kvThreshold <= 0 || kvThreshold > 1.0 {
-		kvThreshold = 0.8
-	}
-	if priorityMap == nil {
-		priorityMap = DefaultSLOPriorityMap()
-	}
+// NewAdaptiveAdmission creates an AdaptiveAdmission.
+func NewAdaptiveAdmission() *AdaptiveAdmission {
 	return &AdaptiveAdmission{
-		QDThreshold:        qdThreshold,
-		KVThreshold:        kvThreshold,
-		PriorityMap:        priorityMap,
-		SheddableShedStart: 0.01,
-		SheddableShedFull:  0.10,
-		BatchShedStart:     0.005,
-		BatchShedFull:      0.05,
+		classCounters: make(map[string]int),
 	}
 }
 
-// Admit implements AdmissionPolicy. Non-sheddable requests always pass.
-// Sheddable/batch requests are probabilistically rejected based on saturation.
+// Admit implements AdmissionPolicy. Critical/standard always pass.
+// Sheddable/batch are probabilistically shed based on GAIE saturation.
 // EVOLVE-BLOCK-START (iter11)
 func (a *AdaptiveAdmission) Admit(req *Request, state *RouterState) (bool, string) {
-	priority := a.PriorityMap.Priority(req.SLOClass)
-	if priority >= 0 {
-		a.totalAdmitted++
-		return true, ""
-	}
+	sloClass := req.SLOClass
 
-	// GAIE saturation: avg(max(QD/qdT, KV/kvT))
+	// GAIE saturation formula (identical to production utilization/detector.go)
 	saturation := 0.0
 	n := len(state.Snapshots)
 	if n > 0 {
 		for _, snap := range state.Snapshots {
-			qRatio := float64(snap.QueueDepth) / a.QDThreshold
-			kvRatio := snap.KVUtilization / a.KVThreshold
+			qRatio := float64(snap.QueueDepth) / 5.0
+			kvRatio := snap.KVUtilization / 0.8
 			if qRatio > kvRatio {
 				saturation += qRatio
 			} else {
@@ -318,38 +291,42 @@ func (a *AdaptiveAdmission) Admit(req *Request, state *RouterState) (bool, strin
 		saturation /= float64(n)
 	}
 
-	// Deterministic pseudo-random for reproducibility
-	requestOrdinal := float64(a.totalAdmitted+a.totalRejected) / 100.0
-	randVal := requestOrdinal - float64(int(requestOrdinal))
+	switch sloClass {
+	case "critical", "standard":
+		// Protected tiers: never reject.
 
-	// Sheddable ramp
-	if a.PriorityMap.Priority(req.SLOClass) >= -2 && a.PriorityMap.Priority(req.SLOClass) < 0 {
-		if saturation >= a.SheddableShedStart {
-			p := (saturation - a.SheddableShedStart) / (a.SheddableShedFull - a.SheddableShedStart)
+	case "sheddable":
+		// Ramp from 0.01 to 0.10.
+		if saturation >= 0.01 {
+			p := (saturation - 0.01) / 0.09
 			if p > 1.0 {
 				p = 1.0
 			}
+			requestOrdinal := float64(a.totalAdmitted+a.totalRejected) / 100.0
+			randVal := requestOrdinal - float64(int(requestOrdinal))
 			if randVal < p {
 				a.totalRejected++
-				return false, fmt.Sprintf("adaptive-shed: class=%s sat=%.3f p=%.3f", req.SLOClass, saturation, p)
+				return false, fmt.Sprintf("adaptive: sheddable-shed sat=%.3f p=%.2f", saturation, p)
+			}
+		}
+
+	case "batch", "background":
+		// More aggressive ramp from 0.005 to 0.05.
+		if saturation >= 0.005 {
+			p := (saturation - 0.005) / 0.045
+			if p > 1.0 {
+				p = 1.0
+			}
+			requestOrdinal := float64(a.totalAdmitted+a.totalRejected) / 100.0
+			randVal := requestOrdinal - float64(int(requestOrdinal))
+			if randVal < p {
+				a.totalRejected++
+				return false, fmt.Sprintf("adaptive: batch-shed sat=%.3f p=%.2f", saturation, p)
 			}
 		}
 	}
 
-	// Batch ramp
-	if a.PriorityMap.Priority(req.SLOClass) <= -3 {
-		if saturation >= a.BatchShedStart {
-			p := (saturation - a.BatchShedStart) / (a.BatchShedFull - a.BatchShedStart)
-			if p > 1.0 {
-				p = 1.0
-			}
-			if randVal < p {
-				a.totalRejected++
-				return false, fmt.Sprintf("adaptive-shed: class=%s sat=%.3f p=%.3f", req.SLOClass, saturation, p)
-			}
-		}
-	}
-
+	a.classCounters[sloClass]++
 	a.totalAdmitted++
 	return true, ""
 }
@@ -376,8 +353,6 @@ func NewAdmissionPolicy(name string, capacity, refillRate float64) AdmissionPoli
 		panic("tier-shed requires NewTierShedAdmission; cannot use generic factory")
 	case "gaie-legacy":
 		panic("gaie-legacy requires NewGAIELegacyAdmission; cannot use generic factory")
-	case "adaptive-admission":
-		panic("adaptive-admission requires NewAdaptiveAdmission; cannot use generic factory")
 	default:
 		panic(fmt.Sprintf("unhandled admission policy %q", name))
 	}

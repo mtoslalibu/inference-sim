@@ -143,6 +143,9 @@ var (
 	prefillRoutingScorers   string // Scorer weights for prefill pool routing
 	decodeRoutingScorers  string  // Scorer weights for decode pool routing
 
+	// Autoscaler config (Phase 1C)
+	modelAutoscalerIntervalUs float64 // tick interval in μs; 0 = disabled
+
 	// Flow control config (issue #882, GIE parity)
 	flowControlEnabled              bool
 	flowControlDetector             string
@@ -288,11 +291,11 @@ type latencyResolution struct {
 //   - Validates gpuMemoryUtilization and blockSizeTokens (used in KV auto-calc)
 //   - Applies defaults.yaml for GPU, TP, and vllmVersion when not set via CLI
 //   - Validates alpha/beta coefficients and auto-detects blackbox mode
-//   - For roofline/crossmodel/trained-roofline: resolves model config folder and
+//   - For roofline/crossmodel/trained-roofline/trained-physics: resolves model config folder and
 //     hardware config, loads coefficients from defaults.yaml, auto-calculates
 //     total-kv-blocks and max-model-len from the HF config
-//   - For blackbox: loads coefficients and KV blocks from defaults.yaml, then
-//     attempts auto-calculation from cached model config as a best-effort fallback
+//   - For blackbox: loads coefficients from defaults.yaml, then auto-calculates
+//     total-kv-blocks and max-model-len via resolveModelConfig (downloads HF config if needed)
 //
 // Side effects (package-level vars mutated):
 //
@@ -378,8 +381,6 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 		}
 	}
 
-	kvBlocksFromDefaults := false
-
 	// --latency-model roofline
 	if backend == "roofline" {
 		var missing []string
@@ -417,14 +418,6 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 			logrus.Fatalf("%v", err)
 		}
 		hwConfigPath = resolvedHW
-		if _, statErr := os.Stat(defaultsFilePath); statErr == nil {
-			_, _, kvBlocks := GetCoefficients(model, tensorParallelism, gpu, vllmVersion, defaultsFilePath)
-			if !cmd.Flags().Changed("total-kv-blocks") && kvBlocks > 0 {
-				totalKVBlocks = kvBlocks
-				kvBlocksFromDefaults = true
-				logrus.Infof("--latency-model: loaded total-kv-blocks=%d from defaults.yaml", kvBlocks)
-			}
-		}
 	}
 
 	// --latency-model crossmodel
@@ -471,12 +464,6 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 						logrus.Infof("--latency-model: loaded crossmodel alpha coefficients from defaults.yaml")
 					}
 				}
-			}
-			_, _, kvBlocks := GetCoefficients(model, tensorParallelism, gpu, vllmVersion, defaultsFilePath)
-			if !cmd.Flags().Changed("total-kv-blocks") && kvBlocks > 0 {
-				totalKVBlocks = kvBlocks
-				kvBlocksFromDefaults = true
-				logrus.Infof("--latency-model: loaded total-kv-blocks=%d from defaults.yaml", kvBlocks)
 			}
 		}
 		if !cmd.Flags().Changed("beta-coeffs") && (len(beta) < 4 || allZeros(beta)) {
@@ -529,12 +516,6 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 						logrus.Infof("--latency-model: loaded trained-roofline alpha coefficients from defaults.yaml")
 					}
 				}
-			}
-			_, _, kvBlocks := GetCoefficients(model, tensorParallelism, gpu, vllmVersion, defaultsFilePath)
-			if !cmd.Flags().Changed("total-kv-blocks") && kvBlocks > 0 {
-				totalKVBlocks = kvBlocks
-				kvBlocksFromDefaults = true
-				logrus.Infof("--latency-model: loaded total-kv-blocks=%d from defaults.yaml", kvBlocks)
 			}
 		}
 		// Validate trained-roofline coefficients.
@@ -594,12 +575,6 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 					}
 				}
 			}
-			_, _, kvBlocks := GetCoefficients(model, tensorParallelism, gpu, vllmVersion, defaultsFilePath)
-			if !cmd.Flags().Changed("total-kv-blocks") && kvBlocks > 0 {
-				totalKVBlocks = kvBlocks
-				kvBlocksFromDefaults = true
-				logrus.Infof("--latency-model: loaded total-kv-blocks=%d from defaults.yaml", kvBlocks)
-			}
 		}
 		// Validate trained-physics coefficients: at least 7 beta required (8th+ optional).
 		if !cmd.Flags().Changed("beta-coeffs") && (len(beta) < 7 || allZeros(beta)) {
@@ -612,46 +587,17 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 		}
 	}
 
-	// --latency-model blackbox: load coefficients and KV blocks from defaults.yaml.
+	// --latency-model blackbox: load coefficients from defaults.yaml.
 	if backend == "blackbox" && !cmd.Flags().Changed("alpha-coeffs") && !cmd.Flags().Changed("beta-coeffs") {
-		newAlpha, newBeta, kvBlocks := GetCoefficients(model, tensorParallelism, gpu, vllmVersion, defaultsFilePath)
+		newAlpha, newBeta := GetCoefficients(model, tensorParallelism, gpu, vllmVersion, defaultsFilePath)
 		alpha, beta = newAlpha, newBeta
-		if !cmd.Flags().Changed("total-kv-blocks") && kvBlocks > 0 {
-			totalKVBlocks = kvBlocks
-			kvBlocksFromDefaults = true
-		}
 	}
-	// Blackbox: best-effort KV-block auto-calculation from cached model config when
-	// neither CLI flag nor defaults.yaml provided a value. Falls through silently if
-	// configs unavailable — totalKVBlocks validation catches 0.
-	if backend == "blackbox" && !cmd.Flags().Changed("total-kv-blocks") && !kvBlocksFromDefaults {
-		baseDir := filepath.Dir(defaultsFilePath)
-		cachedDir, dirErr := bundledModelConfigDir(model, baseDir)
-		if dirErr == nil {
-			hfPath := filepath.Join(cachedDir, "config.json")
-			if _, statErr := os.Stat(hfPath); statErr == nil {
-				hfCfg, parseErr := latency.ParseHFConfig(hfPath)
-				if parseErr == nil {
-					mc, mcErr := latency.GetModelConfigFromHF(hfCfg)
-					if mcErr == nil {
-						applyWeightPrecisionFallback(mc, model, hfCfg.Raw)
-					}
-					resolvedHW, hwPathErr := resolveHardwareConfig(hwConfigPath, defaultsFilePath)
-					if mcErr == nil && hwPathErr == nil {
-						hc, hcErr := latency.GetHWConfig(resolvedHW, gpu)
-						if hcErr == nil && hc.MemoryGiB > 0 {
-							kvParams, kvErr := latency.ExtractKVCapacityParams(hfCfg)
-							if kvErr == nil {
-								autoBlocks, calcErr := latency.CalculateKVBlocks(*mc, hc, tensorParallelism, blockSizeTokens, gpuMemoryUtilization, kvParams)
-								if calcErr == nil {
-									totalKVBlocks = autoBlocks
-									logrus.Infof("--latency-model blackbox: auto-calculated total-kv-blocks=%d from cached model config", totalKVBlocks)
-								}
-							}
-						}
-					}
-				}
-			}
+	// Blackbox: KV-block auto-calculation using same resolution as analytical backends.
+	// Resolves config.json (--model-config-folder → cached → HuggingFace download), then auto-calculates.
+	if backend == "blackbox" && !cmd.Flags().Changed("total-kv-blocks") {
+		if autoBlocks, ok := tryAutoCalcKVBlocksBlackbox(model, modelConfigFolder, defaultsFilePath, hwConfigPath, gpu, tensorParallelism, blockSizeTokens, gpuMemoryUtilization, totalKVBlocks); ok {
+			totalKVBlocks = autoBlocks
+			logrus.Infof("--latency-model blackbox: auto-calculated total-kv-blocks=%d", totalKVBlocks)
 		}
 	}
 	if backend == "blackbox" && allZeros(alpha) && allZeros(beta) {
@@ -690,8 +636,8 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 		}
 
 		// KV capacity auto-calculation. Precedence: (1) --total-kv-blocks CLI flag,
-		// (2) defaults.yaml match, (3) auto-calculate from model architecture + GPU memory.
-		if !cmd.Flags().Changed("total-kv-blocks") && !kvBlocksFromDefaults {
+		// (2) auto-calculate from model architecture + GPU memory, (3) default value.
+		if !cmd.Flags().Changed("total-kv-blocks") {
 			kvParams, kvParamsErr := latency.ExtractKVCapacityParams(hfConfig)
 			if kvParamsErr != nil {
 				logrus.Warnf("--latency-model: could not extract KV capacity params: %v. "+
@@ -793,10 +739,12 @@ func resolveLatencyConfig(cmd *cobra.Command) latencyResolution {
 // tenantBudgets package-level vars (from policy bundle).
 //
 // Returns the parsed scorer configs for weighted routing (caller uses these in
-// DeploymentConfig.RoutingScorerConfigs). Per-pool scorer configs (PD disaggregation)
-// are NOT handled here — they remain inline in runCmd.
-func resolvePolicies(cmd *cobra.Command) []sim.ScorerConfig {
+// DeploymentConfig.RoutingScorerConfigs) and the loaded policy bundle (nil if none).
+// Per-pool scorer configs (PD disaggregation) are NOT handled here — they remain inline
+// in runCmd.
+func resolvePolicies(cmd *cobra.Command) ([]sim.ScorerConfig, *sim.PolicyBundle) {
 	var bundleScorerConfigs []sim.ScorerConfig
+	var loadedBundle *sim.PolicyBundle
 
 	// Load policy bundle if specified (R18: CLI flags override YAML values)
 	if policyConfigPath != "" {
@@ -807,6 +755,7 @@ func resolvePolicies(cmd *cobra.Command) []sim.ScorerConfig {
 		if err := bundle.Validate(); err != nil {
 			logrus.Fatalf("Invalid policy config: %v", err)
 		}
+		loadedBundle = bundle
 		// Apply bundle values as defaults; CLI flags override via Changed().
 		if bundle.Admission.Policy != "" && !cmd.Flags().Changed("admission-policy") {
 			admissionPolicy = bundle.Admission.Policy
@@ -988,7 +937,7 @@ func resolvePolicies(cmd *cobra.Command) []sim.ScorerConfig {
 		logrus.Infof("Token bucket: capacity=%.0f, refill-rate=%.0f", tokenBucketCapacity, tokenBucketRefillRate)
 	}
 
-	return parsedScorerConfigs
+	return parsedScorerConfigs, loadedBundle
 }
 
 // registerSimConfigFlags registers all simulation-engine configuration flags
@@ -1055,6 +1004,7 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	cmd.Flags().Int64Var(&kvTransferBaseLatency, "kv-transfer-base-latency", 0, "Fixed per-transfer latency in ticks for CPU↔GPU KV transfers (0 = no fixed cost)")
 	cmd.Flags().Int64Var(&snapshotRefreshInterval, "snapshot-refresh-interval", 0, "Prometheus snapshot refresh interval for all instance metrics in microseconds (0 = immediate)")
 	cmd.Flags().Int64Var(&cacheSignalDelay, "cache-signal-delay", cluster.DefaultCacheSignalDelay, "Propagation delay for prefix cache signals in microseconds. Only affects precise-prefix-cache and no-hit-lru scorers; no effect on other routing policies. Default 2s matches production llm-d speculative TTL. Set to 0 for oracle mode (live cache state).")
+	cmd.Flags().Float64Var(&modelAutoscalerIntervalUs, "model-autoscaler-interval-us", 0, "Autoscaler tick interval in microseconds (0 = disabled). Overrides policy-config autoscaler.interval_us when non-zero.")
 	cmd.Flags().Float64Var(&gpuMemoryUtilization, "gpu-memory-utilization", 0.9, "Fraction of GPU memory to use for KV cache, in the range (0, 1.0]. Default: 0.9 (90%)")
 
 	// PD disaggregation config
@@ -1087,6 +1037,61 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	cmd.Flags().Int64Var(&prefillMaxModelLen, "prefill-max-model-len", 0, "Max model length for prefill pool instances (0 = use global --max-model-len)")
 	cmd.Flags().Int64Var(&decodeMaxModelLen, "decode-max-model-len", 0, "Max model length for decode pool instances (0 = use global --max-model-len)")
 
+}
+
+// tryAutoCalcKVBlocksBlackbox attempts to auto-calculate KV blocks for blackbox mode.
+// Returns (blocks, true) on success, (0, false) on any failure.
+// Logs warnings for each failure case so the caller can use the fallback value silently.
+func tryAutoCalcKVBlocksBlackbox(model, modelConfigFolder, defaultsFilePath, hwConfigPath, gpu string, tp int, blockSize int64, gpuMemUtil float64, currentBlocks int64) (int64, bool) {
+	resolved, err := resolveModelConfig(model, modelConfigFolder, defaultsFilePath)
+	if err != nil {
+		logrus.Warnf("--latency-model blackbox: could not resolve model config for KV auto-calculation: %v. Using total-kv-blocks=%d", err, currentBlocks)
+		return 0, false
+	}
+
+	hfPath := filepath.Join(resolved, "config.json")
+	hfCfg, parseErr := latency.ParseHFConfig(hfPath)
+	if parseErr != nil {
+		logrus.Warnf("--latency-model blackbox: failed to parse %s: %v. Using total-kv-blocks=%d", hfPath, parseErr, currentBlocks)
+		return 0, false
+	}
+
+	mc, mcErr := latency.GetModelConfigFromHF(hfCfg)
+	if mcErr != nil {
+		logrus.Warnf("--latency-model blackbox: failed to extract model config: %v. Using total-kv-blocks=%d", mcErr, currentBlocks)
+		return 0, false
+	}
+	applyWeightPrecisionFallback(mc, model, hfCfg.Raw)
+
+	resolvedHW, hwErr := resolveHardwareConfig(hwConfigPath, defaultsFilePath)
+	if hwErr != nil {
+		logrus.Warnf("--latency-model blackbox: could not resolve hardware config: %v. Using total-kv-blocks=%d", hwErr, currentBlocks)
+		return 0, false
+	}
+
+	hc, hcErr := latency.GetHWConfig(resolvedHW, gpu)
+	if hcErr != nil {
+		logrus.Warnf("--latency-model blackbox: failed to load hardware config: %v. Using total-kv-blocks=%d", hcErr, currentBlocks)
+		return 0, false
+	}
+	if hc.MemoryGiB <= 0 {
+		logrus.Warnf("--latency-model blackbox: GPU memory not available in hardware config. Using total-kv-blocks=%d", currentBlocks)
+		return 0, false
+	}
+
+	kvParams, kvErr := latency.ExtractKVCapacityParams(hfCfg)
+	if kvErr != nil {
+		logrus.Warnf("--latency-model blackbox: could not extract KV capacity params: %v. Using total-kv-blocks=%d", kvErr, currentBlocks)
+		return 0, false
+	}
+
+	autoBlocks, calcErr := latency.CalculateKVBlocks(*mc, hc, tp, blockSize, gpuMemUtil, kvParams)
+	if calcErr != nil {
+		logrus.Warnf("--latency-model blackbox: KV capacity auto-calculation failed: %v. Using total-kv-blocks=%d", calcErr, currentBlocks)
+		return 0, false
+	}
+
+	return autoBlocks, true
 }
 
 // runCmd executes the simulation using parameters from CLI flags
@@ -1403,7 +1408,53 @@ var runCmd = &cobra.Command{
 
 		// Resolve policy configuration (single code path shared with replayCmd).
 		// Per-pool scorer configs (PD disaggregation) remain inline below.
-		parsedScorerConfigs := resolvePolicies(cmd)
+		parsedScorerConfigs, bundle := resolvePolicies(cmd)
+
+		// Resolve autoscaler and node pool config from policy bundle, then apply CLI overrides.
+		var (
+			bundleAutoscalerIntervalUs  float64
+			bundleScaleUpCooldownUs     float64
+			bundleScaleDownCooldownUs   float64
+			bundleActuationDelayMean    float64
+			bundleActuationDelayStddev  float64
+			bundleAnalyzerCfg           cluster.V2SaturationAnalyzerConfig
+			bundleNodePools             []cluster.NodePoolConfig
+		)
+		if bundle != nil {
+			if bundle.Autoscaler.IntervalUs > 0 {
+				bundleAutoscalerIntervalUs = bundle.Autoscaler.IntervalUs
+				bundleScaleUpCooldownUs = bundle.Autoscaler.ScaleUpCooldownUs
+				bundleScaleDownCooldownUs = bundle.Autoscaler.ScaleDownCooldownUs
+				bundleActuationDelayMean = bundle.Autoscaler.ActuationDelay.Mean
+				bundleActuationDelayStddev = bundle.Autoscaler.ActuationDelay.Stddev
+				bundleAnalyzerCfg = cluster.V2SaturationAnalyzerConfig{
+					KvCacheThreshold:  bundle.Autoscaler.Analyzer.KVCacheThreshold,
+					ScaleUpThreshold:  bundle.Autoscaler.Analyzer.ScaleUpThreshold,
+					ScaleDownBoundary: bundle.Autoscaler.Analyzer.ScaleDownBoundary,
+					AvgInputTokens:    bundle.Autoscaler.Analyzer.AvgInputTokens,
+				}
+			}
+			for _, np := range bundle.NodePools {
+				bundleNodePools = append(bundleNodePools, cluster.NodePoolConfig{
+					Name:         np.Name,
+					GPUType:      np.GPUType,
+					GPUsPerNode:  np.GPUsPerNode,
+					GPUMemoryGiB: np.GPUMemoryGiB,
+					InitialNodes: np.InitialNodes,
+					MinNodes:     np.MinNodes,
+					MaxNodes:     np.MaxNodes,
+					ProvisioningDelay: cluster.DelaySpec{
+						Mean:   np.ProvisioningDelay.Mean,
+						Stddev: np.ProvisioningDelay.Stddev,
+					},
+					CostPerHour: np.CostPerHour,
+				})
+			}
+		}
+		// CLI flag overrides bundle value when explicitly set.
+		if cmd.Flags().Changed("model-autoscaler-interval-us") {
+			bundleAutoscalerIntervalUs = modelAutoscalerIntervalUs
+		}
 
 		// PD disaggregation validation (R3: validate at CLI boundary)
 		if prefillInstances < 0 {
@@ -1570,6 +1621,12 @@ var runCmd = &cobra.Command{
 			FlowControlQueueDepthThreshold:  flowControlQueueDepthThreshold,
 			FlowControlKVCacheUtilThreshold: flowControlKVCacheUtilThreshold,
 			FlowControlMaxConcurrency:       flowControlMaxConcurrency,
+			ModelAutoscalerIntervalUs:       bundleAutoscalerIntervalUs,
+			ScaleUpCooldownUs:               bundleScaleUpCooldownUs,
+			ScaleDownCooldownUs:             bundleScaleDownCooldownUs,
+			ActuationDelay:                  cluster.DelaySpec{Mean: bundleActuationDelayMean, Stddev: bundleActuationDelayStddev},
+			AutoscalerAnalyzerConfig:        bundleAnalyzerCfg,
+			NodePools:                       bundleNodePools,
 		}
 		var followUpRequests []*sim.Request
 		var onRequestDone func(*sim.Request, int64) []*sim.Request

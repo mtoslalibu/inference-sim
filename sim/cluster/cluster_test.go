@@ -2625,3 +2625,107 @@ func TestAutoscaler_RequestBoundedRun_Terminates(t *testing.T) {
 	}
 }
 
+// TestPushArrival_CoInvariant_SessionFollowUpsProcessed verifies the
+// pendingArrivals co-invariant end-to-end: session follow-up requests
+// injected via pushArrival (inside the OnRequestDone callback) are fully
+// processed by the cluster simulation.
+//
+// If pushArrival failed to increment pendingArrivals for follow-ups, the
+// autoscaler's scheduleNextTick termination guard (pendingArrivals <= 0)
+// would fire prematurely, causing Run() to return before follow-ups complete
+// and breaking INV-1 conservation.
+func TestPushArrival_CoInvariant_SessionFollowUpsProcessed(t *testing.T) {
+	cfg := newTestDeploymentConfig(1)
+	cfg.ModelAutoscalerIntervalUs = 100_000 // enable autoscaler to exercise termination guard
+
+	const initial = 3
+	reqs := newTestRequests(initial)
+
+	// Each initial request generates exactly one follow-up; follow-ups generate none.
+	followUpsIssued := 0
+	onDone := func(req *sim.Request, tick int64) []*sim.Request {
+		if followUpsIssued >= initial {
+			return nil
+		}
+		followUpsIssued++
+		return []*sim.Request{{
+			ID:           fmt.Sprintf("followup-%d", followUpsIssued),
+			ArrivalTime:  tick,
+			InputTokens:  make([]int, 50),
+			OutputTokens: make([]int, 20),
+			MaxOutputLen: 20,
+			State:        sim.StateQueued,
+		}}
+	}
+
+	cs := NewClusterSimulator(cfg, reqs, onDone)
+
+	done := make(chan error, 1)
+	go func() { done <- cs.Run() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+		agg := cs.AggregatedMetrics()
+		want := initial * 2 // initial + one follow-up each
+		if agg.CompletedRequests != want {
+			t.Errorf("completed = %d, want %d — follow-up requests not tracked by pendingArrivals co-invariant",
+				agg.CompletedRequests, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() timed out — autoscaler terminated early, pendingArrivals co-invariant likely broken for follow-up requests")
+	}
+}
+
+// newBatchTestRequests creates n requests with the given SLOClass,
+// arriving every 10µs starting at t=0, with 50 input tokens and 20 output tokens.
+func newBatchTestRequests(n int, sloClass string) []*sim.Request {
+	reqs := make([]*sim.Request, n)
+	for i := range reqs {
+		reqs[i] = &sim.Request{
+			ID:           fmt.Sprintf("req_%s_%d", sloClass, i),
+			ArrivalTime:  int64(i) * 10,
+			SLOClass:     sloClass,
+			InputTokens:  make([]int, 50),
+			OutputTokens: make([]int, 20),
+			State:        sim.StateQueued,
+		}
+	}
+	return reqs
+}
+
+// TestBatchRequestsNotSerialized verifies that batch and background requests are
+// NOT serialized — they flow through admission like standard requests.
+// This is a regression guard for issue #965.
+func TestBatchRequestsNotSerialized(t *testing.T) {
+	for _, sloClass := range []string{"batch", "background"} {
+		t.Run(sloClass, func(t *testing.T) {
+			requests := newBatchTestRequests(10, sloClass)
+			cfg := newTestDeploymentConfig(1)
+			cs := NewClusterSimulator(cfg, requests, nil)
+			mustRun(t, cs)
+
+			// Always-admit must not reject batch/background requests.
+			if cs.RejectedRequests() != 0 {
+				t.Errorf("expected 0 rejections under always-admit, got %d", cs.RejectedRequests())
+			}
+
+			m := cs.AggregatedMetrics()
+			if m.CompletedRequests != 10 {
+				t.Fatalf("completed %d requests, want 10", m.CompletedRequests)
+			}
+
+			// Batch/background requests must flow through admission concurrently (not serialized).
+			// With beta=[1000,10,5]: concurrent mean ~6.6ms, serialized mean ~99ms.
+			// 15ms gives ~8ms margin above the concurrent ceiling.
+			ttftMeanMs := float64(m.TTFTSum) / float64(m.CompletedRequests) / 1000.0
+			const boundMs = 15.0
+			if ttftMeanMs >= boundMs {
+				t.Errorf("mean TTFT %.2fms >= bound %.1fms: %s requests are being serialized (regression: #965)", ttftMeanMs, boundMs, sloClass)
+			}
+		})
+	}
+}
+

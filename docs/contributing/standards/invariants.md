@@ -12,7 +12,7 @@ Invariants are properties that must hold at all times during and after simulatio
 
 **Full pipeline:** `num_requests == injected_requests + rejected_requests` (from anomaly counters).
 
-**Verification:** `sim/cluster/cluster_test.go` and `sim/cluster/cluster_deferred_test.go` — conservation tests. Conservation fields (`still_queued`, `still_running`, `injected_requests`) are included in CLI JSON output.
+**Verification:** `sim/cluster/cluster_test.go` — conservation tests. Conservation fields (`still_queued`, `still_running`, `injected_requests`) are included in CLI JSON output.
 
 **Evidence:** Issue #183 — a silently-dropped request violated conservation for months.
 
@@ -42,7 +42,7 @@ Invariants are properties that must hold at all times during and after simulatio
 
 **Statement:** `allocated_blocks + free_blocks = total_blocks` at all times.
 
-**Verification:** Checked after every allocation/deallocation. Transactional allocation with rollback on mid-loop failure (R5).
+**Verification:** Checked after every allocation/deallocation. Check-then-act pre-check gate before any state mutation (vLLM parity); post-pre-check `popFreeBlock() == nil` panics (structurally unreachable in single-threaded DES). `FreeBlockCnt` maintained in lockstep by `appendToFreeList`/`removeFromFreeList`. `verifyBlockConservation()` provides independent free-list walk for debug-mode assertions.
 
 **Operational note (H8):** KV cache pressure exhibits a sharp cliff, not gradual degradation. In H8's workload, performance was identical above ~2200 blocks and collapsed below it (4.7x TTFT P99 increase with just 4.5% fewer blocks). Below ~1000 blocks, the preempt-requeue cycle can livelock (see R19). Capacity planning formula: `threshold ≈ rate / num_instances × (input_tokens + output_tokens) / block_size`.
 
@@ -83,11 +83,11 @@ Invariants are properties that must hold at all times during and after simulatio
 | BatchSize | Instance | Immediate | Periodic | `StepEvent.Execute()` |
 | KVUtilization | Instance | Immediate | Periodic | `FormBatch()` → `AllocateKVBlocks()` |
 | CacheHitRate | Instance | Immediate | Periodic | `FormBatch()` |
-| cacheQueryFn (precise-prefix-cache, no-hit-lru) ¹ | Instance (via StaleCacheIndex) | Ground truth (synchronous) | Demand-triggered (CacheSignalDelay interval, checked at routing decisions) | `StaleCacheIndex.RefreshIfNeeded()` in `buildRouterState()` |
+| cacheQueryFn (precise-prefix-cache, no-hit-lru) ¹ | Instance (via CachedSnapshotProvider) | Ground truth (synchronous) | Periodic (CacheBlocks interval, default 50ms) | `CachedSnapshotProvider.RefreshCacheIfNeeded()` in `buildRouterState()` |
 
-¹ `cacheQueryFn` freshness is governed by `--cache-signal-delay` (default 2s), not `--snapshot-refresh-interval`. The "interval=0" / "interval>0" columns for this row refer to `--cache-signal-delay`.
+¹ `cacheQueryFn` freshness is governed by `--cache-signal-delay` (default 50ms), which maps to `ObservabilityConfig.CacheBlocks`. The "interval=0" / "interval>0" columns for this row refer to `--cache-signal-delay`. Cache block staleness is now managed by `CachedSnapshotProvider` alongside other signals (#1060).
 
-**Design implication:** When `--snapshot-refresh-interval > 0`, all Prometheus-sourced signals (QueueDepth, BatchSize, KVUtilization) share the same scrape interval — matching real vLLM deployments where all three are exposed via the same `/metrics` endpoint. `InFlightRequests` remains synchronous (gateway-local counter, not Prometheus-sourced). When `--cache-signal-delay > 0` (default: 2s), prefix cache query closures use a separate periodic snapshot of each instance's `HashToBlock` map, modeling asynchronous KV event propagation from production llm-d. The 2s default matches llm-d's `defaultSpeculativeTTL` — the blind spot between routing decision and KV event arrival via ZMQ. Set `--cache-signal-delay 0` for oracle mode (live cache state).
+**Design implication:** When `--snapshot-refresh-interval > 0`, all Prometheus-sourced signals (QueueDepth, BatchSize, KVUtilization) share the same scrape interval — matching real vLLM deployments where all three are exposed via the same `/metrics` endpoint. `InFlightRequests` remains synchronous (gateway-local counter, not Prometheus-sourced). When `--cache-signal-delay > 0` (default: 50ms), prefix cache query closures use periodic snapshots of each instance's `HashToBlock` map, managed by `CachedSnapshotProvider` alongside other signal snapshots. The 50ms default models aggregate signal staleness from production llm-d. Set `--cache-signal-delay 0` for oracle mode (live cache state).
 
 `EffectiveLoad()` = `QueueDepth + BatchSize + InFlightRequests`. The synchronous `InFlightRequests` term compensates for Periodic staleness in the other two terms. The `queue-depth` scorer reads `QueueDepth` only (GIE parity); `EffectiveLoad()` is used by `load-balance`, `least-loaded`, `always-busiest`, and admission policies. The `active-requests` scorer reads `InFlightRequests` only (synchronous). The `running-requests` scorer reads `BatchSize` (Periodic/Immediate). The `load-aware` scorer reads `QueueDepth` only (Periodic/Immediate), with a linear threshold at 128.
 

@@ -30,12 +30,11 @@ type ClusterSimulator struct {
 	routingLatency       int64
 	admissionPolicy      sim.AdmissionPolicy
 	priorityMap          *sim.SLOPriorityMap
-	snapshotProvider     SnapshotProvider
+	snapshotProvider     *CachedSnapshotProvider
 	routingPolicy        sim.RoutingPolicy
 	rejectedRequests     int                    // EC-2: count of requests rejected by admission policy
 	routingRejections    int                    // I13: count of requests rejected at routing (no routable instances)
 	shedByTier           map[string]int         // per-SLOClass rejection counts (Phase 1B-1a)
-	deferredQueue        []*sim.Request         // Batch/Background requests awaiting idle capacity (Phase 1B-1b)
 	trace                *trace.SimulationTrace // nil when trace-level is "none" (BC-1: zero overhead)
 	preGeneratedRequests []*sim.Request         // Pre-generated requests (all workload paths unified)
 	inFlightRequests     map[string]int         // instance ID → dispatched-but-not-completed count (#463)
@@ -83,10 +82,8 @@ type ClusterSimulator struct {
 	// are added in NodeReadyEvent.Execute. Nil when no instances exist yet.
 	cacheQueryFn map[string]func([]int) int
 
-	// staleCache manages periodic snapshots of per-instance KV cache hash maps
-	// for stale prefix cache scoring (issue #919). Nil when CacheSignalDelay == 0 (oracle mode).
-	// Default CacheSignalDelay is 2s, matching llm-d's speculative TTL.
-	staleCache *StaleCacheIndex
+	// Cache block staleness is managed by CachedSnapshotProvider via
+	// ObservabilityConfig.CacheBlocks (unified in #1060).
 
 	// Flow control state (issue #882, GIE parity).
 	// When flowControlEnabled is false, these fields are nil/zero (BC-1 pass-through).
@@ -331,20 +328,12 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 	// Initialize snapshot provider with exactly the placed instances.
 	// Deferred instances are registered via CachedSnapshotProvider.AddInstance
 	// when NodeReadyEvent.Execute constructs them (Phase 4, T017).
-	cs.snapshotProvider = NewCachedSnapshotProvider(instanceMap, newObservabilityConfig(config.SnapshotRefreshInterval))
+	cs.snapshotProvider = NewCachedSnapshotProvider(instanceMap, newObservabilityConfig(config.SnapshotRefreshInterval, config.CacheSignalDelay))
 
-	// Build cacheQueryFn from constructed instances for precise prefix cache scoring.
-	if config.CacheSignalDelay > 0 {
-		// Stale mode: scorers query periodically-refreshed snapshots (issue #919).
-		cs.staleCache = NewStaleCacheIndex(instanceMap, config.CacheSignalDelay)
-		cs.cacheQueryFn = cs.staleCache.BuildCacheQueryFn()
-	} else {
-		// Zero delay (CacheSignalDelay=0) — oracle mode: scorers query live KV cache state.
-		cs.cacheQueryFn = make(map[string]func([]int) int, len(cs.instances))
-		for _, inst := range cs.instances {
-			cs.registerInstanceCacheQueryFn(inst.ID(), inst)
-		}
-	}
+	// Build cacheQueryFn from the unified snapshot provider (#1060).
+	// When CacheSignalDelay > 0, CachedSnapshotProvider manages stale snapshots.
+	// When CacheSignalDelay == 0, oracle mode: closures query live instance state.
+	cs.cacheQueryFn = cs.snapshotProvider.BuildCacheQueryFn()
 
 	// Create routing policies now that cacheQueryFn is available.
 	cs.routingPolicy = sim.NewRoutingPolicyWithCache(config.RoutingPolicy, config.RoutingScorerConfigs, config.BlockSizeTokens, rng.ForSubsystem(sim.SubsystemRouter), cs.cacheQueryFn)
@@ -451,11 +440,7 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 				}
 				nextReqs := onRequestDone(req, tick)
 				for _, next := range nextReqs {
-					heap.Push(&cs.clusterEvents, clusterEventEntry{
-						event: &ClusterArrivalEvent{time: next.ArrivalTime, request: next},
-						seqID: cs.nextSeqID(),
-					})
-					cs.pendingArrivals++ // mirror Run() — session follow-ups must be tracked
+					cs.pushArrival(next, next.ArrivalTime)
 				}
 				return nil // don't inject locally — route through cluster pipeline
 			}
@@ -466,21 +451,18 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 }
 
 // registerInstanceCacheQueryFn adds a cacheQueryFn entry for a single instance,
-// choosing between stale (snapshot) and oracle (live) modes based on cs.staleCache (R23).
-// Called from two sites: oracle-mode constructor loop (NewClusterSimulator) and
-// NodeReadyEvent.Execute (deferred instances). NOT called from the stale-mode
-// constructor — that path uses the bulk NewStaleCacheIndex + BuildCacheQueryFn API.
+// choosing between stale (snapshot) and oracle (live) modes based on
+// ObservabilityConfig.CacheBlocks (#1060).
+// Called from NodeReadyEvent.Execute (deferred instances).
 // Precondition: cs.cacheQueryFn must be non-nil (initialised before calling).
 func (cs *ClusterSimulator) registerInstanceCacheQueryFn(id InstanceID, inst *InstanceSimulator) {
-	if cs.staleCache != nil {
-		// Stale mode: register with StaleCacheIndex; the closure delegates to s.Query at
-		// call time, so it picks up refreshed snapshots automatically after RefreshIfNeeded.
-		// CO-CHANGE: BuildCacheQueryFn (stale_cache.go) produces equivalent closures for
-		// the initial instance set — update both if closure semantics change.
-		cs.staleCache.AddInstance(id, inst)
+	if cs.snapshotProvider.IsStaleCacheMode() {
+		// Stale mode: register with CachedSnapshotProvider; the closure delegates
+		// to CacheQuery at call time, picking up refreshed snapshots automatically.
+		cs.snapshotProvider.AddCacheInstance(id, inst)
 		idStr := string(id)
 		cs.cacheQueryFn[idStr] = func(tokens []int) int {
-			return cs.staleCache.Query(idStr, tokens)
+			return cs.snapshotProvider.CacheQuery(idStr, tokens)
 		}
 	} else {
 		// Oracle mode: closure captures inst directly for live-state queries.
@@ -489,6 +471,25 @@ func (cs *ClusterSimulator) registerInstanceCacheQueryFn(id InstanceID, inst *In
 			return inst.GetCachedBlockCount(tokens)
 		}
 	}
+}
+
+// pushArrival enqueues a ClusterArrivalEvent and increments pendingArrivals
+// as a paired operation. All ClusterArrivalEvent pushes MUST go through this
+// method — it is the single enforcement point for the pendingArrivals
+// co-invariant used by scheduleNextTick (autoscaler.go). Direct heap.Push of
+// ClusterArrivalEvent outside this method is prohibited.
+// The paired decrement occurs in ClusterArrivalEvent.Execute (cluster_event.go).
+//
+// NOTE: When ClusterSubsystem hooks are introduced (see discussion #1033 PR D),
+// OnRequestDone hooks that generate follow-ups should return them to the
+// coordinator rather than calling pushArrival directly, preserving this method
+// as the single enforcement point. See also issue #1041.
+func (cs *ClusterSimulator) pushArrival(req *sim.Request, timeUs int64) {
+	heap.Push(&cs.clusterEvents, clusterEventEntry{
+		event: &ClusterArrivalEvent{time: timeUs, request: req},
+		seqID: cs.nextSeqID(),
+	})
+	cs.pendingArrivals++
 }
 
 // Run executes the cluster simulation using online routing pipeline:
@@ -521,11 +522,7 @@ func (c *ClusterSimulator) Run() error {
 	}
 
 	for _, req := range requests {
-		heap.Push(&c.clusterEvents, clusterEventEntry{
-			event: &ClusterArrivalEvent{time: req.ArrivalTime, request: req},
-			seqID: c.nextSeqID(),
-		})
-		c.pendingArrivals++
+		c.pushArrival(req, req.ArrivalTime)
 	}
 
 	// 3. Shared-clock event loop (BC-4: cluster events before instance events)
@@ -629,15 +626,12 @@ func (c *ClusterSimulator) Run() error {
 			if inst.State == InstanceStateDraining && inst.QueueDepth() == 0 && inst.BatchSize() == 0 {
 				inst.TransitionTo(InstanceStateTerminated)
 				c.releaseInstanceGPUs(inst)
-				if c.staleCache != nil {
-					c.staleCache.RemoveInstance(inst.ID())
-				}
+				c.snapshotProvider.RemoveCacheInstance(inst.ID())
 				delete(c.cacheQueryFn, string(inst.ID()))
-				// I1: a non-zero inFlightRequests at termination time indicates a bookkeeping bug.
-				// This would cause isBusy() to permanently return true, silently stranding
-				// all deferred Batch/Background requests until horizon.
+				// I1: a non-zero inFlightRequests at termination time indicates a bookkeeping bug —
+				// a missing completion event or an early-termination race.
 				if c.inFlightRequests[instID] != 0 {
-					logrus.Warnf("[cluster] instance %s terminated with inFlightRequests=%d — bookkeeping bug; deferred queue may stall",
+					logrus.Warnf("[cluster] instance %s terminated with inFlightRequests=%d — bookkeeping bug",
 						instID, c.inFlightRequests[instID])
 				}
 			}
@@ -758,6 +752,77 @@ func (c *ClusterSimulator) nextSeqID() int64 {
 	id := c.seqCounter
 	c.seqCounter++
 	return id
+}
+
+// addLiveInstance constructs, registers, and activates an InstanceSimulator for a
+// placement that succeeded while the cluster is already running.
+// Called from NodeReadyEvent.Execute (deferred placement) and DirectActuator.scaleUp
+// (autoscaler direct placement). NOT used by the NewClusterSimulator startup path,
+// which bulk-initialises the snapshot provider with a full instance map.
+//
+// simCfg must already have GPU and HWConfig set (pool-authoritative, SC-004).
+// Returns true on success. On false, GPU allocations have been released — callers
+// must not touch the instance and should skip/continue.
+//
+// Maintenance note: if you add a new field to instance initialisation here, also
+// check NewClusterSimulator's construction loop (which does NOT call this method).
+func (cs *ClusterSimulator) addLiveInstance(
+	id InstanceID,
+	model string,
+	simCfg sim.SimConfig,
+	nodeID string,
+	gpuIDs []string,
+	tpDegree int,
+	costPerHour float64,
+) bool {
+	inst := NewInstanceSimulator(id, simCfg)
+	inst.Model = model
+	inst.nodeID = nodeID
+	inst.allocatedGPUIDs = gpuIDs
+	inst.TPDegree = tpDegree
+	inst.CostPerHour = costPerHour
+	inst.warmUpRemaining = cs.config.InstanceLifecycle.WarmUpRequestCount
+	inst.TransitionTo(InstanceStateLoading)
+
+	if cs.snapshotProvider == nil {
+		// snapshotProvider is nil — can only happen in unit tests that bypass
+		// NewClusterSimulator. Release GPUs so they are not held by a phantom
+		// instance (R1: no silent data loss).
+		logrus.Warnf("[cluster] addLiveInstance: snapshotProvider is nil for instance %s — releasing GPUs and skipping", id)
+		cs.releaseInstanceGPUs(inst)
+		return false
+	}
+	cs.snapshotProvider.AddInstance(id, inst)
+
+	cs.scheduleInstanceLoadedEvent(inst)
+	cs.instances = append(cs.instances, inst)
+	cs.inFlightRequests[string(id)] = 0
+
+	// Register with cacheQueryFn for precise prefix scoring.
+	// registerInstanceCacheQueryFn handles both oracle and stale modes (R23).
+	if cs.cacheQueryFn != nil {
+		cs.registerInstanceCacheQueryFn(id, inst)
+	}
+
+	// Wire OnRequestDone callback — mirrors startup path in NewClusterSimulator (R4).
+	onRequestDone := cs.sessionCallback
+	if onRequestDone != nil || cs.tenantTracker != nil {
+		inst.sim.OnRequestDone = func(req *sim.Request, tick int64) []*sim.Request {
+			if cs.tenantTracker != nil {
+				cs.tenantTracker.OnComplete(req.TenantID)
+			}
+			if onRequestDone == nil {
+				return nil
+			}
+			nextReqs := onRequestDone(req, tick)
+			for _, next := range nextReqs {
+				cs.pushArrival(next, next.ArrivalTime)
+			}
+			return nil // don't inject locally — route through cluster pipeline
+		}
+	}
+
+	return true
 }
 
 // poolsConfigured returns true if PD disaggregation pool topology is active.
@@ -903,11 +968,7 @@ func (c *ClusterSimulator) detectDecodeCompletions(inst *InstanceSimulator) {
 			origCopy.ProgressIndex = parent.DecodeSubReq.ProgressIndex
 			nextReqs := c.sessionCallback(&origCopy, parent.CompletionTime)
 			for _, next := range nextReqs {
-				heap.Push(&c.clusterEvents, clusterEventEntry{
-					event: &ClusterArrivalEvent{time: next.ArrivalTime, request: next},
-					seqID: c.nextSeqID(),
-				})
-				c.pendingArrivals++ // mirror Run() — PD session follow-ups must be tracked
+				c.pushArrival(next, next.ArrivalTime)
 			}
 		}
 	}
@@ -929,11 +990,7 @@ func (c *ClusterSimulator) detectDecodeCompletions(inst *InstanceSimulator) {
 			// No follow-ups expected, but handle defensively.
 			nextReqs := c.sessionCallback(&origCopy, parent.CompletionTime)
 			for _, next := range nextReqs {
-				heap.Push(&c.clusterEvents, clusterEventEntry{
-					event: &ClusterArrivalEvent{time: next.ArrivalTime, request: next},
-					seqID: c.nextSeqID(),
-				})
-				c.pendingArrivals++ // mirror Run() — PD decode-timeout follow-ups must be tracked
+				c.pushArrival(next, next.ArrivalTime)
 			}
 		}
 	}
@@ -983,27 +1040,6 @@ func (c *ClusterSimulator) ShedByTier() map[string]int {
 		result[k] = v
 	}
 	return result
-}
-
-// isBusy returns true when any non-terminated instance has non-zero effective load.
-// Uses the three-component definition: QueueDepth + BatchSize + InFlightRequests > 0.
-// Skips instances in InstanceStateTerminated state — stale inFlightRequests on terminated
-// instances must not count as load (otherwise a recently terminated instance with residual
-// accounting would permanently block deferred-queue promotion).
-// An empty instance pool returns false (not busy).
-// Preserved for scheduling-tier deferral (#899).
-//
-//nolint:unused
-func (c *ClusterSimulator) isBusy() bool {
-	for _, inst := range c.instances {
-		if inst.State == InstanceStateTerminated {
-			continue // stale inFlightRequests on terminated instances must not count as load
-		}
-		if inst.QueueDepth()+inst.BatchSize()+c.inFlightRequests[string(inst.ID())] > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // gpuInventory computes the current GPU inventory for Engine.Optimize().
@@ -1070,35 +1106,6 @@ func (c *ClusterSimulator) gpuInventory() GPUInventory {
 		byVariant[v] = free
 	}
 	return GPUInventory{byVariant: byVariant}
-}
-
-// promoteDeferred injects all deferred requests as ClusterArrivalEvents at the current clock.
-// Called when isBusy() transitions to false. Truncates deferredQueue after injection.
-// INV-8: ensures work-conserving behaviour — deferred requests re-enter the pipeline
-// within the same scheduling step as the idle transition.
-//
-// Preserved for scheduling-tier deferral (#899).
-//
-//nolint:unused
-func (c *ClusterSimulator) promoteDeferred() {
-	logrus.Debugf("[cluster] promoting %d deferred requests at tick %d", len(c.deferredQueue), c.clock)
-	for _, req := range c.deferredQueue {
-		heap.Push(&c.clusterEvents, clusterEventEntry{
-			event: &ClusterArrivalEvent{time: c.clock, request: req},
-			seqID: c.nextSeqID(),
-		})
-	}
-	c.deferredQueue = c.deferredQueue[:0]
-}
-
-// DeferredQueueLen returns the number of requests in the deferred queue.
-// Panics if called before Run() completes.
-// Preserved for #899 (deferred queue redesign).
-func (c *ClusterSimulator) DeferredQueueLen() int {
-	if !c.hasRun {
-		panic("ClusterSimulator.DeferredQueueLen() called before Run()")
-	}
-	return len(c.deferredQueue)
 }
 
 // GatewayQueueDepth returns the number of requests still in the gateway queue

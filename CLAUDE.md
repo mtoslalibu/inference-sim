@@ -57,6 +57,11 @@ go build -o blis main.go
   --max-concurrency 32 --unconstrained-output \
   --trace-header trace.yaml --trace-data trace.csv
 
+# Observe with exact output length control (min_tokens=output_tokens defers EOS to target length; vLLM/compatible servers only)
+./blis observe --server-url http://localhost:8000 --model qwen/qwen3-14b \
+  --rate 10 --num-requests 100 --output-tokens 2048 --min-tokens 2048 \
+  --trace-header trace.yaml --trace-data trace.csv
+
 # Observe with ITL (inter-token latency) recording for streaming requests
 ./blis observe --server-url http://localhost:8000 --model qwen/qwen3-14b \
   --workload chatbot --rate 10 --num-requests 100 \
@@ -188,7 +193,7 @@ Full details: see [`docs/contributing/standards/principles.md`](docs/contributin
 
 ### Current Implementation Focus
 
-Composable Scorer Framework completed: PR17 (scorer framework + stateless scorers) and PR18 (prefix-affinity scorer + router-side cache). Default weighted routing profile: `precise-prefix-cache:2,queue-depth:1,kv-utilization:1` (llm-d parity). Precise prefix scoring (#883): `precise-prefix-cache` scorer queries actual instance KV cache state with min-max normalization (llm-d production parity); `no-hit-lru` scorer distributes cold requests to least-recently-used endpoints. Valid scorer names: `prefix-affinity`, `precise-prefix-cache`, `no-hit-lru`, `queue-depth`, `kv-utilization`, `load-balance`, `active-requests`, `running-requests`, `load-aware`.
+Composable Scorer Framework completed: PR17 (scorer framework + stateless scorers) and PR18 (prefix-affinity scorer + router-side cache). Default weighted routing profile: `precise-prefix-cache:2,queue-depth:1,kv-utilization:1` (llm-d parity). Precise prefix scoring (#883): `precise-prefix-cache` scorer queries actual instance KV cache state with min-max normalization (llm-d production parity); `no-hit-lru` scorer distributes cold requests to least-recently-used endpoints. Valid scorer names: `prefix-affinity`, `precise-prefix-cache`, `no-hit-lru`, `queue-depth`, `kv-utilization`, `load-balance`, `active-requests`, `running-requests`, `load-aware`, `vllm-dp`.
 
 Phase 0 workload unification complete (see issue #420): W0-1 (spec v2 schema + SLO tiers), W0-2 (binary rename + converters), W0-3 (cohort population dynamics), W0-4 (legacy retirement). All workload generation now flows through `sim/workload/GenerateRequests()`. SLO tiers: critical, standard, sheddable, batch, background. Arrival processes: poisson, gamma, weibull, constant. CLI binary renamed from `simulation_worker` to `blis`.
 
@@ -230,6 +235,20 @@ When using Task agents: 1) Do NOT poll TaskList repeatedly — check at reasonab
 ### Macro Plan Updates
 
 When asked to update the macro implementation plan, directly edit the document. Do NOT spend time re-reading all source documents or dispatching sub-agents to gather information you already have in context. Start writing immediately.
+
+### Issue Filing
+
+<!-- Keep in sync with .github/ISSUE_TEMPLATE/ — update when templates change -->
+
+When filing a GitHub issue, pick the template that matches your situation:
+
+1. **Found a bug or wrong simulation result?** → `Bug report` (`.github/ISSUE_TEMPLATE/bug_report.md`)
+2. **Porting a feature from an external repo (llmd, gaie, vllm, sglang)?** → `Cross-repo feature` (`.github/ISSUE_TEMPLATE/cross_repo_feature.md`) — requires GitHub permalinks to source code
+3. **Proposing a new BLIS-native capability?** → `Feature request` (`.github/ISSUE_TEMPLATE/feature_request.md`)
+4. **Testing a hypothesis or running an experiment?** → `Hypothesis Proposal` (`.github/ISSUE_TEMPLATE/hypothesis.md`)
+5. **Fixing an antipattern, hardening, or refactoring?** → `Hardening / refactoring` (`.github/ISSUE_TEMPLATE/custom.md`)
+
+Every issue must have at least one label. Use `gh issue create --template "Template name"` to pre-fill the template.
 
 ## Speckit Feature-Development Toolkit
 

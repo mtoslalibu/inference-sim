@@ -1,0 +1,37 @@
+# W1: High prefix reuse + high load
+#
+# Two dominant prefix groups (system prompts) drive strong cache affinity.
+# At 80 QPS (~1.1x capacity) the prefix scorer concentrates traffic on
+# cached instances, creating hot spots that queue-depth (weight 2) can't
+# override prefix (weight 3).
+
+version: "2"
+seed: 42
+aggregate_rate: 80
+num_requests: 4000
+
+clients:
+  - id: "chat-system-A"
+    prefix_group: "system-prompt-A"
+    prefix_length: 512
+    rate_fraction: 0.40
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+
+  - id: "chat-system-B"
+    prefix_group: "system-prompt-B"
+    prefix_length: 512
+    rate_fraction: 0.40
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+
+  - id: "cold-queries"
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 32, max: 256}}

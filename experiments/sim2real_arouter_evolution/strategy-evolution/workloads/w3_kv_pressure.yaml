@@ -1,0 +1,30 @@
+# W3: KV pressure
+#
+# Large prompts with shared prefix fill KV cache to >90%.
+# Prefix scorer routes TO full instances (they have cached blocks),
+# but those instances are about to preempt -- destroying the cache
+# we routed for. High rate drives contention.
+
+version: "2"
+seed: 42
+aggregate_rate: 60
+num_requests: 3000
+
+clients:
+  - id: "long-context-A"
+    prefix_group: "document-A"
+    prefix_length: 1536
+    rate_fraction: 0.50
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 512, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+
+  - id: "long-context-B"
+    prefix_group: "document-B"
+    prefix_length: 1536
+    rate_fraction: 0.50
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 512, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}

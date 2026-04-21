@@ -311,6 +311,8 @@ func newRoutingPolicyInternal(name string, scorerConfigs []ScorerConfig, blockSi
 		return &WeightedScoring{scorers: scorers, weights: weights, observers: observers, rng: rng}
 	case "always-busiest":
 		return &AlwaysBusiest{}
+	case "adaptive":
+		return &AdaptiveScoring{cacheFn: cacheFn, rng: rng}
 	default:
 		panic(fmt.Sprintf("unhandled routing policy %q", name))
 	}

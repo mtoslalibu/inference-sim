@@ -298,7 +298,7 @@ func (sim *Simulator) SimHorizon() int64 { return sim.Horizon }
 // PostDecodeFixedOverhead returns the latency model's fixed per-request post-decode
 // overhead in microseconds. Used by the cluster layer to include overhead in
 // parent.CompletionTime when disaggregated decode sub-requests complete.
-// Returns 0 for all backends except trained-roofline (BC-1, issue #846).
+// Returns 0 for all backends except trained-physics (BC-1, issue #846).
 func (sim *Simulator) PostDecodeFixedOverhead() int64 {
 	return sim.latencyModel.PostDecodeFixedOverhead()
 }
@@ -481,7 +481,7 @@ func (sim *Simulator) recordKVUsageMetrics(stepDuration int64) {
 // E2E and RequestCompletionTimes beyond the RequestLeftEvent timestamp by the overhead
 // amount. This is architecturally intentional: real vLLM's post-processing (detokenization,
 // response serialization) is non-blocking but still contributes to client-perceived latency.
-// For trained-roofline, PostDecodeFixedOverhead adds ~1.85ms to E2E; for other backends it's 0.
+// For trained-physics, PostDecodeFixedOverhead adds ~777µs to E2E; for other backends it's 0.
 func (sim *Simulator) recordRequestCompletion(req *Request) {
 	// INV-1 conservation: Always increment CompletedRequests.
 	// For redirected requests: the source instance drained the request from its WaitQ
@@ -540,13 +540,15 @@ func (sim *Simulator) recordRequestCompletion(req *Request) {
 // Step simulates a single vllm step(): batch scheduling, model execution, mirroring, and completion.
 // Phases: (1) schedule batch, (2) execute prefill/decode, (2.5) mirror to CPU, (3) process completions, (4) schedule next step.
 //
-// Orphaned StepEvent guard: when a TimeoutEvent empties the RunningBatch and nils stepEvent,
-// a previously-scheduled StepEvent may still be in the heap. If the INV-8 guard also scheduled
-// a new StepEvent, two StepEvents fire at the same tick. The second finds RunningBatch nil and
-// WaitQ empty (already processed by the first). This guard prevents the phantom double-step.
+// Orphaned StepEvent guard: when a TimeoutEvent empties the RunningBatch it leaves
+// sim.stepEvent pointing to the already-scheduled StepEvent (preventing the cascade
+// described in #1096). If that StepEvent fires and finds nothing to do, clearing
+// sim.stepEvent here prevents future QueuedEvent INV-8 guards from seeing a stale
+// non-nil pointer and skipping their step-scheduling.
 func (sim *Simulator) Step(now int64) {
 	if sim.RunningBatch == nil && sim.WaitQ.Len() == 0 {
-		return // orphaned StepEvent — nothing to process
+		sim.stepEvent = nil
+		return
 	}
 	sim.scheduleBatch(now)
 	currStepAdvance := sim.executeBatchStep(now)

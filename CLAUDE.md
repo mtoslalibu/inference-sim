@@ -267,7 +267,9 @@ For the full annotated file tree, see [`docs/reference/project-structure.md`](do
 
 ### Latency Estimation
 
-Five latency model modes (roofline, blackbox, cross-model, trained-roofline, trained-physics), selected via `--latency-model` flag. **Trained-physics** is the recommended default for new models. **Trained-roofline, crossmodel, and blackbox are deprecated** and will be removed in a future version.
+Three latency model modes (roofline, blackbox, trained-physics), selected via `--latency-model` flag. **Trained-physics** is the recommended default for new models.
+
+**Migration note:** The deprecated `crossmodel` and `trained-roofline` backends have been removed. Use `--latency-model trained-physics` for modern physics-informed estimation with MoE-aware overhead modeling.
 
 **Trained-physics model**: Roofline basis functions with learned correction coefficients. Generalizes across model architectures, workloads, and TP configurations. No per-model calibration needed.
 
@@ -315,6 +317,7 @@ Request processing pipeline: Arrival → Admission → Routing → WaitQueue →
 - In-memory node/GPU inventory maps; no external storage
 
 ## Recent Changes
+- fix(observe): streaming timeout status + configurable timeout (#1118): `blis observe` now correctly sets `status=timeout` (not silent `ok`) when HTTP client timeout fires during streaming, non-streaming body read, or HTTP round-trip. New `--timeout` flag (seconds, default 300) configures per-request HTTP timeout. `isTimeoutError()` helper checks both `os.IsTimeout()` and `context.DeadlineExceeded` for robust detection. Three error paths fixed: `httpClient.Do`, `handleStreamingResponse` scanner error, `handleNonStreamingResponse` body read.
 - Workload-level aggregate metrics in calibration (#1084): `MetricComparison` extended with `RealMean`, `SimMean`, `RealMedian`, `SimMedian`, `MeanError`, `MeanPercentError`, `MedianError`, `MedianPercentError`. CLI summary logs include `MeanError=±Xµs (±Y%)` alongside existing MAPE/PearsonR/quality. JSON report auto-includes new fields. Mean computed via single-pass sum; median aliased from P50. Division-by-zero guarded for degenerate inputs (R11, R20).
 - GAIE-legacy saturation-based admission (#1014): `gaie-legacy` admission policy replicates production llm-d/GAIE admission behavior. Saturation formula: `avg(max(qd/qdThreshold, kvUtil/kvThreshold))` across instances. Non-sheddable requests (priority >= 0) always pass; sheddable requests (priority < 0) rejected when saturation >= 1.0. Defaults: `gaie_qd_threshold=5`, `gaie_kv_threshold=0.8`. Empty pool → saturation=1.0 (conservative). Configured via policy bundle YAML only. Per-tier shed counter (`shedByTier`) now tracks all tier-aware admission rejections unconditionally.
 - Configurable SLO tier priorities (#1013): `SLOPriorityMap` type replaces hardcoded `SLOTierPriority()`. GAIE-compatible defaults: critical=4, standard=3, batch=-1, sheddable=-2, background=-3. `IsSheddable(class)` returns `priority < 0` (matches llm-d `sheddable.go`). Configurable via policy bundle YAML `slo_priorities` in `AdmissionConfig` (e.g., `admission: { slo_priorities: { batch: 0 } }` to make batch non-sheddable). Tenant budget enforcement uses `IsSheddable()` instead of hardcoded priority threshold. `TierShedMinPriority` validation removed (GAIE priorities are unbounded integers).

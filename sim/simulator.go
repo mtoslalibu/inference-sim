@@ -491,14 +491,18 @@ func (sim *Simulator) recordRequestCompletion(req *Request) {
 	sim.Metrics.CompletedRequests++
 	sim.Metrics.TTFTSum += req.FirstTokenTime
 
-	// Count decode tokens at completion time, not inline during each decode step.
-	// Inline counting double-counts when a request is preempted (ProgressIndex reset
-	// to 0) and re-runs: tokens from the aborted run are counted a second time.
-	// At completion: PI = InputLen + OutputLen - 1 (normal) or maxModelLen - 1 (capped),
-	// so PI - InputLen counts decode-step increments (= OutputLen - 1; the first output
-	// token is generated at prefill completion, not as a decode-step increment).
+	// Count output tokens at completion time (not inline per step) to avoid
+	// double-counting under preemption (ProgressIndex reset to 0 on eviction).
+	// PI - InputLen counts decode-step increments (= OutputLen - 1 for normal completion).
+	// Add 1 for the prefill-generated first token (#1097) when decodeTokens falls short
+	// of OutputLen. PD 1-output decode sub-requests are the exception: their PI_final
+	// lands at InputLen+1 (one step past the InputLen threshold), so decodeTokens==OutputLen
+	// already — the guard prevents double-counting in that case.
 	decodeTokens := int(req.ProgressIndex) - len(req.InputTokens)
-	if decodeTokens > 0 { // zero-output-token requests complete with PI == InputLen → decodeTokens == 0
+	if decodeTokens < len(req.OutputTokens) {
+		decodeTokens++ // prefill-generated first token (vLLM parity)
+	}
+	if decodeTokens > 0 {
 		sim.Metrics.TotalOutputTokens += decodeTokens
 	}
 
@@ -646,9 +650,12 @@ func (sim *Simulator) executeBatchStep(now int64) int64 {
 	// similar to vLLM's execute_model()
 	// Note: Per-request TTFT fields (FirstTokenTime, RequestTTFTs) are recorded inline
 	// because they are tightly coupled to the prefill/decode state transitions in this
-	// loop (scalar/map overwrites, safe across preemption). TTFTSum and TotalOutputTokens
-	// are computed at completion time in recordRequestCompletion to avoid double-counting
-	// when a preempted request re-runs from ProgressIndex=0.
+	// loop. Safety across preemption comes from the !req.TTFTSet guard below (TTFTSet is
+	// reset to false on preemption by batch_formation.go), not from overwrite idempotency —
+	// the guard ensures the block fires exactly once per prefill completion so FirstTokenTime
+	// always reflects the final re-prefill. TTFTSum and TotalOutputTokens are computed at
+	// completion time in recordRequestCompletion to avoid double-counting when a preempted
+	// request re-runs from ProgressIndex=0.
 	for _, req := range sim.RunningBatch.Requests {
 		if req.ProgressIndex < util.Len64(req.InputTokens) {
 			req.ProgressIndex = sim.reqNumComputedTokens[req.ID]
@@ -664,7 +671,13 @@ func (sim *Simulator) executeBatchStep(now int64) int64 {
 				req.ITL = append(req.ITL, currStepAdvance+sim.latencyModel.OutputTokenProcessingTime())
 			}
 		}
-		if req.ProgressIndex == util.Len64(req.InputTokens) { // prefill complete, first token is generated
+		// !req.TTFTSet guard: fires once per prefill completion (including re-prefill after
+		// preemption). TTFTSet is reset to false on preemption (batch_formation.go) so this
+		// block fires again on re-prefill, overwriting FirstTokenTime with the correct
+		// post-preemption TTFT. req.FirstTokenTime is a scalar assignment (not an
+		// accumulation), so overwriting it is safe. TTFTSum is not accumulated here;
+		// it is accumulated exactly once at completion time in recordRequestCompletion.
+		if req.ProgressIndex == util.Len64(req.InputTokens) && !req.TTFTSet {
 			req.TTFTSet = true
 			req.FirstTokenTime = now + currStepAdvance + sim.latencyModel.OutputTokenProcessingTime() - req.ArrivalTime
 			sim.Metrics.RequestTTFTs[req.ID] = float64(req.FirstTokenTime)

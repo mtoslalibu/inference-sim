@@ -1,0 +1,26 @@
+# W2 Mid: Binary tiers, moderate overload — Qwen3-14B on 4x H100 TP=1
+#
+# Rate=90 → ~1.23x capacity. Moderate overload.
+# Tier mix: critical 30% (was crit 10% + std 20%), sheddable 70% (was shed 5% + batch 65%)
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 90
+num_requests: 16200
+
+clients:
+  - id: "critical"
+    slo_class: "critical"
+    rate_fraction: 0.30
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 256, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+  - id: "sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.70
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 256, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}

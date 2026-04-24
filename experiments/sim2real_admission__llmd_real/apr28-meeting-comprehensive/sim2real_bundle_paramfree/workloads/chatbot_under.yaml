@@ -1,0 +1,27 @@
+# Chatbot Under: mostly critical, under-capacity — Qwen3-14B on 4x H100 TP=1
+#
+# Rate=7 → ~0.4x capacity (est. capacity ~18 req/s for 4K/1K shape).
+# Tier mix: critical 80%, sheddable 20%
+# Chatbot-shaped: long input (4096), long output (1024). Users are waiting.
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 7
+num_requests: 3780
+
+clients:
+  - id: "critical"
+    slo_class: "critical"
+    rate_fraction: 0.80
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 4096, std_dev: 1024, min: 512, max: 8192}}
+    output_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 128, max: 2048}}
+  - id: "sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 4096, std_dev: 1024, min: 512, max: 8192}}
+    output_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 128, max: 2048}}

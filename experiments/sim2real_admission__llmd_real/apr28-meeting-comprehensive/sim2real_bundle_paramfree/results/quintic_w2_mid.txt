@@ -1,0 +1,182 @@
+time="2026-04-24T13:49:50-04:00" level=warning msg="Finding default values of vLLM version for model=qwen/qwen3-14b"
+time="2026-04-24T13:49:50-04:00" level=warning msg="Using default vLLM version=vllm/vllm-openai:v0.11.0"
+=== Simulation Metrics ===
+{
+  "instance_id": "instance_0",
+  "completed_requests": 2163,
+  "still_queued": 0,
+  "still_running": 0,
+  "injected_requests": 2163,
+  "total_input_tokens": 2225433,
+  "total_output_tokens": 553437,
+  "vllm_estimated_duration_s": 186.665649,
+  "responses_per_sec": 11.58756317291137,
+  "tokens_per_sec": 2964.857235194891,
+  "e2e_mean_ms": 5204.968842810911,
+  "e2e_p90_ms": 6831.7244,
+  "e2e_p95_ms": 7266.2753,
+  "e2e_p99_ms": 8127.987659999999,
+  "ttft_mean_ms": 49.03231160425335,
+  "ttft_p90_ms": 56.8864,
+  "ttft_p95_ms": 58.3776,
+  "ttft_p99_ms": 63.74652,
+  "itl_mean_ms": 20.226983434734816,
+  "itl_p90_ms": 23.851,
+  "itl_p95_ms": 24.643,
+  "itl_p99_ms": 25.875,
+  "scheduling_delay_p99_ms": 36.15641999999999,
+  "preemption_count": 0,
+  "dropped_unservable": 0,
+  "length_capped_requests": 0,
+  "timed_out_requests": 0
+}
+=== Simulation Metrics ===
+{
+  "instance_id": "instance_1",
+  "completed_requests": 2163,
+  "still_queued": 0,
+  "still_running": 0,
+  "injected_requests": 2163,
+  "total_input_tokens": 2201189,
+  "total_output_tokens": 549773,
+  "vllm_estimated_duration_s": 186.221799,
+  "responses_per_sec": 11.615181528774727,
+  "tokens_per_sec": 2952.248356273263,
+  "e2e_mean_ms": 5122.867686546463,
+  "e2e_p90_ms": 6743.5314,
+  "e2e_p95_ms": 7256.538899999999,
+  "e2e_p99_ms": 8105.990139999999,
+  "ttft_mean_ms": 48.87942163661582,
+  "ttft_p90_ms": 56.863800000000005,
+  "ttft_p95_ms": 58.4851,
+  "ttft_p99_ms": 64.32075999999999,
+  "itl_mean_ms": 20.038633271854057,
+  "itl_p90_ms": 23.535,
+  "itl_p95_ms": 24.378,
+  "itl_p99_ms": 25.675,
+  "scheduling_delay_p99_ms": 35.74144,
+  "preemption_count": 0,
+  "dropped_unservable": 0,
+  "length_capped_requests": 0,
+  "timed_out_requests": 0
+}
+=== Simulation Metrics ===
+{
+  "instance_id": "instance_2",
+  "completed_requests": 2163,
+  "still_queued": 0,
+  "still_running": 0,
+  "injected_requests": 2163,
+  "total_input_tokens": 2219238,
+  "total_output_tokens": 558722,
+  "vllm_estimated_duration_s": 186.542617,
+  "responses_per_sec": 11.595205614596905,
+  "tokens_per_sec": 2995.143999722058,
+  "e2e_mean_ms": 5273.818716134998,
+  "e2e_p90_ms": 6941.5352,
+  "e2e_p95_ms": 7395.5711,
+  "e2e_p99_ms": 8379.56756,
+  "ttft_mean_ms": 49.29392048081368,
+  "ttft_p90_ms": 57.1922,
+  "ttft_p95_ms": 58.791199999999996,
+  "ttft_p99_ms": 64.31200000000001,
+  "itl_mean_ms": 20.30147115040813,
+  "itl_p90_ms": 23.869,
+  "itl_p95_ms": 24.689,
+  "itl_p99_ms": 25.992,
+  "scheduling_delay_p99_ms": 37.00489999999999,
+  "preemption_count": 0,
+  "dropped_unservable": 0,
+  "length_capped_requests": 0,
+  "timed_out_requests": 0
+}
+=== Simulation Metrics ===
+{
+  "instance_id": "instance_3",
+  "completed_requests": 2162,
+  "still_queued": 0,
+  "still_running": 0,
+  "injected_requests": 2162,
+  "total_input_tokens": 2208097,
+  "total_output_tokens": 554222,
+  "vllm_estimated_duration_s": 186.27066,
+  "responses_per_sec": 11.606766197102647,
+  "tokens_per_sec": 2975.358545462823,
+  "e2e_mean_ms": 5205.0838080481035,
+  "e2e_p90_ms": 6810.5798,
+  "e2e_p95_ms": 7346.023099999999,
+  "e2e_p99_ms": 8218.94104,
+  "ttft_mean_ms": 49.1107053654024,
+  "ttft_p90_ms": 57.1335,
+  "ttft_p95_ms": 58.716750000000005,
+  "ttft_p99_ms": 62.66633999999999,
+  "itl_mean_ms": 20.188990280042024,
+  "itl_p90_ms": 23.757,
+  "itl_p95_ms": 24.526,
+  "itl_p99_ms": 25.825,
+  "scheduling_delay_p99_ms": 36.14569,
+  "preemption_count": 0,
+  "dropped_unservable": 0,
+  "length_capped_requests": 0,
+  "timed_out_requests": 0
+}
+=== Simulation Metrics ===
+{
+  "instance_id": "cluster",
+  "completed_requests": 8651,
+  "still_queued": 0,
+  "still_running": 0,
+  "injected_requests": 8651,
+  "total_input_tokens": 8853957,
+  "total_output_tokens": 2216154,
+  "vllm_estimated_duration_s": 186.665649,
+  "responses_per_sec": 46.34489551958218,
+  "tokens_per_sec": 11872.318296763857,
+  "e2e_mean_ms": 5201.684370477402,
+  "e2e_p90_ms": 6833.547,
+  "e2e_p95_ms": 7326.1285,
+  "e2e_p99_ms": 8214.4605,
+  "ttft_mean_ms": 49.07908611721188,
+  "ttft_p90_ms": 57.063,
+  "ttft_p95_ms": 58.593,
+  "ttft_p99_ms": 64.017,
+  "itl_mean_ms": 20.18953835532726,
+  "itl_p90_ms": 23.751,
+  "itl_p95_ms": 24.545,
+  "itl_p99_ms": 25.824,
+  "scheduling_delay_p99_ms": 36.229499999999994,
+  "preemption_count": 0,
+  "dropped_unservable": 0,
+  "length_capped_requests": 0,
+  "timed_out_requests": 0
+}
+=== Anomaly Counters ===
+Priority Inversions: 0
+HOL Blocking Events: 0
+Rejected Requests (Admission): 7549
+  Shed (sheddable): 7549
+Rejected Requests (Routing): 0
+Dropped Unservable: 0
+Timed Out Requests: 0
+Length-Capped Requests: 0
+=== Per-SLO Metrics ===
+  critical:
+    TTFT: mean=48863.59 p99=60860.41 (n=4860)
+    E2E:  mean=5213827.07 p99=8210798.17 (n=4860)
+    SLO_attainment(E2E<3000ms): 0.0420
+    SLO_attainment(E2E<5000ms): 0.4379
+    SLO_attainment(E2E<8000ms): 0.9854
+    SLO_attainment(E2E<10000ms): 0.9998
+    SLO_attainment(E2E<12000ms): 1.0000
+    SLO_attainment(E2E<15000ms): 1.0000
+    SLO_attainment(E2E<20000ms): 1.0000
+  sheddable:
+    TTFT: mean=49355.35 p99=67064.30 (n=3791)
+    E2E:  mean=5186117.63 p99=8223661.00 (n=3791)
+    SLO_attainment(E2E<3000ms): 0.0414
+    SLO_attainment(E2E<5000ms): 0.4395
+    SLO_attainment(E2E<8000ms): 0.9858
+    SLO_attainment(E2E<10000ms): 1.0000
+    SLO_attainment(E2E<12000ms): 1.0000
+    SLO_attainment(E2E<15000ms): 1.0000
+    SLO_attainment(E2E<20000ms): 1.0000

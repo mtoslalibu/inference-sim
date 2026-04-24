@@ -198,8 +198,6 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 			kvThreshold = 0.8 // GAIE DefaultKVCacheUtilThreshold (config.go:33)
 		}
 		admissionPolicy = sim.NewGAIELegacyAdmission(qdThreshold, kvThreshold, priorityMap)
-	case "adaptive-admission":
-		admissionPolicy = sim.NewAdaptiveAdmission()
 	default:
 		admissionPolicy = sim.NewAdmissionPolicy(config.AdmissionPolicy, config.TokenBucketCapacity, config.TokenBucketRefillRate)
 	}

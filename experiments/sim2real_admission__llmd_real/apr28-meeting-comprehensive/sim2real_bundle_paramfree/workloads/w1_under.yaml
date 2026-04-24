@@ -1,0 +1,26 @@
+# W1 Under: Binary tiers, under-capacity — Qwen3-14B on 4x H100 TP=1
+#
+# Rate=35 → ~0.48x capacity. Well under capacity. No shedding expected from ideal algo.
+# Tier mix: critical 50% (was crit 20% + std 30%), sheddable 50% (was shed 45% + batch 5%)
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 35
+num_requests: 6300
+
+clients:
+  - id: "critical"
+    slo_class: "critical"
+    rate_fraction: 0.50
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 256, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+  - id: "sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.50
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 256, max: 2048}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}

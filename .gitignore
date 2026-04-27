@@ -110,3 +110,7 @@ docs/superpowers/
 # Agent instruction files (generated, not committed)
 AGENTS.md
 .worktrees/
+
+# Temporary reference repos
+tmp/
+experiments/

@@ -312,8 +312,19 @@ Example:
 
 		printKVCacheMetrics(os.Stdout, rawMetrics.PreemptionRate, rawMetrics.CacheHitRate, rawMetrics.KVThrashingRate)
 
-		sloDistributions := cluster.ComputePerSLODistributions(cs.AggregatedMetrics())
-		printPerSLOMetrics(os.Stdout, sloDistributions)
+		replayAgg := cs.AggregatedMetrics()
+		sloDistributions := cluster.ComputePerSLODistributions(replayAgg)
+		replayE2EByClass := make(map[string][]float64)
+		for reqID, e2e := range replayAgg.RequestE2Es {
+			if req, ok := replayAgg.Requests[reqID]; ok {
+				cls := req.SLOClass
+				if cls == "" {
+					cls = "default"
+				}
+				replayE2EByClass[cls] = append(replayE2EByClass[cls], e2e)
+			}
+		}
+		printPerSLOMetrics(os.Stdout, sloDistributions, replayE2EByClass)
 
 		// Print per-model metrics if requests carry model tags (Phase 1A, FR-011)
 		perModelMetrics := cluster.ComputePerModelMetrics(cs.AggregatedMetrics())

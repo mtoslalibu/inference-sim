@@ -1,3 +1,25 @@
+// Glia HRA (Head-Room Allocator) — complete routing.go with Glia algorithm embedded.
+//
+// This is a standalone copy of inference-sim/sim/routing.go with the static-weight
+// scoring block in WeightedScoring.Route() replaced by the Glia HRA algorithm.
+// The Glia section is clearly marked with GLIA-START / GLIA-END comments.
+//
+// What Glia does:
+//   Instead of using the scorer pipeline with weighted combination, Glia estimates
+//   the KV-cache headroom for each instance after hypothetically placing the request.
+//   It projects block usage from input tokens (with a decode-to-prompt ratio),
+//   checks if the instance can fit the request with a safety margin, and scores
+//   based on projected utilization + queue load. Inadmissible instances get a
+//   heavy penalty.
+//
+//   Key signals: FreeKVBlocks, KVUtilization (both stale ~5s), QueueDepth,
+//   BatchSize, InFlightRequests, and request InputTokens.
+//
+// Origin: Adapted from sim2real/blis_router_sweet/baselines/baseline_glia.go,
+//   updated to match the latest BLIS routing.go (Model field, cacheFn constructor).
+//
+// See hypo-oracle.md for comparison with the oracle adaptive router.
+
 package sim
 
 import (
@@ -18,14 +40,8 @@ type RoutingSnapshot struct {
 	KVUtilization    float64
 	FreeKVBlocks     int64
 	CacheHitRate     float64
-	InFlightRequests int   // Requests dispatched to this instance but not yet completed
-	PreemptionCount  int64 // Cumulative preemption events since instance start (monotonically increasing; Immediate by default, Periodic when --snapshot-refresh-interval > 0)
+	InFlightRequests int    // Requests dispatched to this instance but not yet completed
 	Model            string // Model served by this instance; used by buildRouterState() for per-model filtering
-	GPUType          string  // GPU hardware type (e.g. "A100-80GB"); populated by buildRouterState() from instance config
-	TPDegree         int     // Tensor-parallel degree; populated by buildRouterState() from instance config
-	CostPerHour           float64 // Node pool cost in $/hr; populated by buildRouterState() from NodePool.CostPerHour
-	TotalKvCapacityTokens int64   // Total KV cache capacity in tokens (TotalBlocks × BlockSizeTokens); used by V2SaturationAnalyzer
-	KvTokensInUse         int64   // Current KV cache occupancy in tokens (UsedBlocks × BlockSizeTokens); used by V2SaturationAnalyzer
 }
 
 // EffectiveLoad returns the total effective load on this instance:
@@ -49,10 +65,10 @@ func NewRoutingSnapshot(id string) RoutingSnapshot {
 type RoutingDecision struct {
 	TargetInstance string             // Instance ID to route to (must match a snapshot ID)
 	Reason         string             // Human-readable explanation
-	Scores         map[string]float64 // Instance ID → composite score (nil for policies without scoring)
+	Scores         map[string]float64 // Instance ID -> composite score (nil for policies without scoring)
 	// Priority is a one-shot cluster-level priority hint applied before instance injection.
 	// Zero (default) means defer to instance-level PriorityPolicy entirely.
-	// Non-zero value sets req.Priority for initial queue ordering only — the instance-level
+	// Non-zero value sets req.Priority for initial queue ordering only -- the instance-level
 	// PriorityPolicy recomputes priority each step, so this hint affects first-step scheduling
 	// but does not persist. This is intentional: it allows priority to evolve over time
 	// (e.g., SLOBasedPriority ages requests) while giving routing a way to influence initial placement.
@@ -155,12 +171,12 @@ type observerFunc func(req *Request, targetInstance string)
 // WeightedScoring routes requests using a composable scorer pipeline.
 //
 // Each scorer evaluates all instances on a [0,1] scale. Scores are combined
-// with configurable weights: composite = Σ clamp(s_i) × w_i, then argmax.
+// with configurable weights: composite = sum clamp(s_i) * w_i, then argmax.
 //
 // Available scorers: prefix-affinity (proportional prefix match ratio),
 // precise-prefix-cache (min-max normalization of actual KV cache hits),
 // no-hit-lru (cold request distribution to least-recently-used instances),
-// queue-depth (min-max normalization of QueueDepth),
+// queue-depth (min-max normalization of EffectiveLoad),
 // kv-utilization (1 - KVUtilization), load-balance (1/(1 + EffectiveLoad)).
 // See sim/routing_*.go for scorer implementations.
 //
@@ -169,6 +185,9 @@ type observerFunc func(req *Request, targetInstance string)
 //
 // Higher scores are preferred. Ties broken randomly when rng is non-nil;
 // by first occurrence (lowest index) when rng is nil.
+//
+// GLIA MODIFICATION: The Route() method below uses Glia HRA (Head-Room Allocator)
+// instead of the scorer pipeline. See the GLIA-START / GLIA-END block.
 type WeightedScoring struct {
 	scorers   []scorerFunc
 	weights   []float64 // normalized to sum to 1.0
@@ -177,53 +196,89 @@ type WeightedScoring struct {
 }
 
 // Route implements RoutingPolicy for WeightedScoring.
+//
+// GLIA VERSION: Uses Glia HRA (Head-Room Allocator) for KV-cache-aware routing
+// instead of the default scorer pipeline. The Glia section replaces the entire
+// scoring + argmax block.
 func (ws *WeightedScoring) Route(req *Request, state *RouterState) RoutingDecision {
 	snapshots := state.Snapshots
 	if len(snapshots) == 0 {
 		panic("WeightedScoring.Route: empty snapshots")
 	}
 
-	// Compute composite scores from all scorers
+	// ========================================================================
+	// GLIA-START: Glia HRA (Head-Room Allocator) for KV-cache-aware routing.
+	//
+	// Replaces the default scorer pipeline. Instead of weighted scorer combination,
+	// Glia estimates per-instance KV headroom after hypothetically placing this
+	// request, then picks the instance with the most headroom remaining.
+	//
+	// Signals used:
+	//   - FreeKVBlocks (stale ~5s via Prometheus)
+	//   - KVUtilization (stale ~5s via Prometheus)
+	//   - QueueDepth + BatchSize + InFlightRequests (mixed freshness)
+	//   - req.InputTokens (request metadata)
+	//
+	// Parameters:
+	//   - decodeToPromptRatio (0.6): anticipated decode overhead
+	//   - safetyFraction (0.03): minimum free block fraction to remain admissible
+	//   - blockSize (16): KV block size in tokens
+	// ========================================================================
+
+	decodeToPromptRatio := 0.6
+	safetyFraction := 0.03
+	blockSize := 16.0
+
+	inputTokens := float64(len(req.InputTokens))
+	reqBlocks := (inputTokens*(1.0+decodeToPromptRatio) + blockSize - 1.0) / blockSize
+
 	scores := make(map[string]float64, len(snapshots))
-	for i, scorer := range ws.scorers {
-		dimScores := scorer(req, snapshots)
-		for _, snap := range snapshots {
-			s := dimScores[snap.ID]
-			// Clamp to [0,1] per scorer contract
-			if s < 0 {
-				s = 0
-			}
-			if s > 1 {
-				s = 1
-			}
-			scores[snap.ID] += s * ws.weights[i]
-		}
-	}
+	bestIdx := 0
+	bestScore := -1e18
 
-	// Argmax: select instance with highest composite score.
-	// Pass 1: find maximum score.
-	bestScore := -1.0
-	for _, snap := range snapshots {
-		if scores[snap.ID] > bestScore {
-			bestScore = scores[snap.ID]
-		}
-	}
-
-	// Pass 2: collect all instances tied at maximum score.
-	// Exact float equality is correct here because identical instance states produce
-	// bitwise-identical scores (same accumulation order on same data per IEEE 754).
-	var tied []int
 	for i, snap := range snapshots {
-		if scores[snap.ID] == bestScore {
-			tied = append(tied, i)
+		freeBlocks := float64(snap.FreeKVBlocks)
+		kvUtil := snap.KVUtilization
+
+		// Estimate total blocks from utilization ratio.
+		var totalBlocks float64
+		if kvUtil > 0.001 && kvUtil < 0.999 {
+			totalBlocks = freeBlocks / (1.0 - kvUtil)
+		} else if kvUtil <= 0.001 {
+			totalBlocks = freeBlocks
+		} else {
+			totalBlocks = freeBlocks * 1000.0
+		}
+		if totalBlocks < 1.0 {
+			totalBlocks = 1.0
+		}
+
+		// Project usage after placing this request.
+		minFreeBlocks := totalBlocks * safetyFraction
+		allocatedBlocks := totalBlocks - freeBlocks
+		projectedUsage := allocatedBlocks + reqBlocks
+		freeAfter := totalBlocks - projectedUsage
+		admissible := freeAfter >= minFreeBlocks
+		queueLoad := float64(snap.QueueDepth + snap.BatchSize + snap.InFlightRequests)
+
+		// Score: prefer low projected utilization; penalize inadmissible instances.
+		var score float64
+		if admissible {
+			score = -projectedUsage/totalBlocks - 0.001*queueLoad
+		} else {
+			score = -10.0 - projectedUsage/totalBlocks - 0.001*queueLoad
+		}
+
+		scores[snap.ID] = score
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
 		}
 	}
 
-	// Random tie-breaking when rng is non-nil; positional (first) when nil.
-	bestIdx := tied[0]
-	if len(tied) > 1 && ws.rng != nil {
-		bestIdx = tied[ws.rng.Intn(len(tied))]
-	}
+	// ========================================================================
+	// GLIA-END
+	// ========================================================================
 
 	// Notify observers of routing decision (stateful scorers update their state).
 	// Uses post-tie-breaking bestIdx so prefix-affinity records the actual target.
@@ -312,8 +367,6 @@ func newRoutingPolicyInternal(name string, scorerConfigs []ScorerConfig, blockSi
 		return &WeightedScoring{scorers: scorers, weights: weights, observers: observers, rng: rng}
 	case "always-busiest":
 		return &AlwaysBusiest{}
-	case "adaptive":
-		return &AdaptiveScoring{cacheFn: cacheFn, rng: rng}
 	default:
 		panic(fmt.Sprintf("unhandled routing policy %q", name))
 	}

@@ -1,0 +1,27 @@
+# Code Completion Under: mostly sheddable, under-capacity — Qwen3-14B on 4x H100 TP=1
+#
+# Rate=40 → ~0.4-0.5x capacity (est. capacity ~70-90 req/s for 2K/128 shape).
+# Tier mix: critical 30%, sheddable 70%
+# Code-completion-shaped: long input (2048), short output (128). Prefill-heavy, fast drain.
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 40
+num_requests: 16200
+
+clients:
+  - id: "critical"
+    slo_class: "critical"
+    rate_fraction: 0.30
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 2048, std_dev: 512, min: 256, max: 4096}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}
+  - id: "sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.70
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 2048, std_dev: 512, min: 256, max: 4096}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 16, max: 256}}

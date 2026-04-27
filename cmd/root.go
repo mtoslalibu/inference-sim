@@ -1654,8 +1654,19 @@ var runCmd = &cobra.Command{
 		printKVCacheMetrics(os.Stdout, rawMetrics.PreemptionRate, rawMetrics.CacheHitRate, rawMetrics.KVThrashingRate)
 
 		// Print per-SLO metrics if multiple SLO classes present (BC-3, BC-4, BC-10)
-		sloDistributions := cluster.ComputePerSLODistributions(cs.AggregatedMetrics())
-		printPerSLOMetrics(os.Stdout, sloDistributions)
+		aggMetrics := cs.AggregatedMetrics()
+		sloDistributions := cluster.ComputePerSLODistributions(aggMetrics)
+		e2eByClass := make(map[string][]float64)
+		for reqID, e2e := range aggMetrics.RequestE2Es {
+			if req, ok := aggMetrics.Requests[reqID]; ok {
+				cls := req.SLOClass
+				if cls == "" {
+					cls = "default"
+				}
+				e2eByClass[cls] = append(e2eByClass[cls], e2e)
+			}
+		}
+		printPerSLOMetrics(os.Stdout, sloDistributions, e2eByClass)
 
 		// Print per-model metrics if requests carry model tags (Phase 1A, FR-011)
 		perModelMetrics := cluster.ComputePerModelMetrics(cs.AggregatedMetrics())
@@ -1711,7 +1722,8 @@ func printKVCacheMetrics(w io.Writer, preemptionRate, cacheHitRate, kvThrashingR
 }
 
 // printPerSLOMetrics prints per-SLO-class latency distributions when multiple classes exist.
-func printPerSLOMetrics(w io.Writer, sloMetrics map[string]*cluster.SLOMetrics) {
+// e2eByClass provides raw per-request E2E values (microseconds) for SLO attainment computation.
+func printPerSLOMetrics(w io.Writer, sloMetrics map[string]*cluster.SLOMetrics, e2eByClass map[string][]float64) {
 	if len(sloMetrics) <= 1 {
 		return
 	}
@@ -1730,6 +1742,18 @@ func printPerSLOMetrics(w io.Writer, sloMetrics map[string]*cluster.SLOMetrics) 
 		_, _ = fmt.Fprintf(w, "  %s:\n", cls)
 		_, _ = fmt.Fprintf(w, "    TTFT: mean=%.2f p99=%.2f (n=%d)\n", m.TTFT.Mean, m.TTFT.P99, m.TTFT.Count)
 		_, _ = fmt.Fprintf(w, "    E2E:  mean=%.2f p99=%.2f (n=%d)\n", m.E2E.Mean, m.E2E.P99, m.E2E.Count)
+		// SLO attainment at standard thresholds
+		if e2eVals, ok := e2eByClass[cls]; ok && len(e2eVals) > 0 {
+			for _, targetUs := range []float64{3e6, 5e6, 8e6, 10e6, 12e6, 15e6, 20e6} {
+				count := 0
+				for _, v := range e2eVals {
+					if v <= targetUs {
+						count++
+					}
+				}
+				_, _ = fmt.Fprintf(w, "    SLO_attainment(E2E<%dms): %.4f\n", int(targetUs/1000), float64(count)/float64(len(e2eVals)))
+			}
+		}
 	}
 }
 

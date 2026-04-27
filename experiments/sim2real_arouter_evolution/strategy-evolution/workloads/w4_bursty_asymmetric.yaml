@@ -1,0 +1,55 @@
+# W4: Bursty load asymmetry
+#
+# Many prefix groups with Poisson arrivals create transient load
+# imbalances. Min-max normalization of queue-depth amplifies small
+# spreads to full [0,1]. Prefix scorer (weight 3) easily overrides
+# the normalized queue signal (weight 2).
+
+version: "2"
+seed: 42
+aggregate_rate: 70
+num_requests: 3500
+
+clients:
+  - id: "tenant-1"
+    prefix_group: "tenant-1"
+    prefix_length: 256
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 192, std_dev: 64, min: 32, max: 384}}
+
+  - id: "tenant-2"
+    prefix_group: "tenant-2"
+    prefix_length: 256
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 192, std_dev: 64, min: 32, max: 384}}
+
+  - id: "tenant-3"
+    prefix_group: "tenant-3"
+    prefix_length: 256
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 192, std_dev: 64, min: 32, max: 384}}
+
+  - id: "tenant-4"
+    prefix_group: "tenant-4"
+    prefix_length: 256
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 192, std_dev: 64, min: 32, max: 384}}
+
+  - id: "cold-adhoc"
+    rate_fraction: 0.20
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 64, max: 512}}
+    output_distribution: {type: gaussian, params: {mean: 128, std_dev: 32, min: 32, max: 256}}

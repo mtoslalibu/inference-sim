@@ -1,0 +1,31 @@
+# W2: Cold burst after warm steady-state
+#
+# First 2000 requests use a shared prefix (warm, cache builds up).
+# Next 2000 requests have NO prefix (cold burst). The prefix scorer
+# still has weight 3 but returns ~equal scores for all instances,
+# diluting the load-balancing signal from queue-depth.
+#
+# Simulated as two client groups arriving simultaneously -- the warm
+# group at moderate rate, the cold group at higher rate.
+
+version: "2"
+seed: 42
+aggregate_rate: 80
+num_requests: 4000
+
+clients:
+  - id: "warm-steady"
+    prefix_group: "shared-context"
+    prefix_length: 1024
+    rate_fraction: 0.50
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}
+
+  - id: "cold-burst"
+    rate_fraction: 0.50
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 512, std_dev: 128, min: 128, max: 1024}}
+    output_distribution: {type: gaussian, params: {mean: 256, std_dev: 64, min: 32, max: 512}}

@@ -1,0 +1,28 @@
+# Blind Spot Mid: max-gap design, moderate overload — Qwen3-14B on 4x H100 TP=1
+#
+# Rate=10 → ~0.8x capacity (est. capacity ~18 req/s for 4K/1K shape).
+# Tier mix: critical 10%, sheddable 90%
+# Same shape as chatbot but 90% sheddable — exploits GAIE blind spot at moderate overload.
+# Expected: GAIE sheds ~0% (saturation < 1.0), quintic sheds most of 90% sheddable traffic.
+
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 10
+num_requests: 8100
+
+clients:
+  - id: "critical"
+    slo_class: "critical"
+    rate_fraction: 0.10
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 4096, std_dev: 1024, min: 512, max: 8192}}
+    output_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 128, max: 2048}}
+  - id: "sheddable"
+    slo_class: "sheddable"
+    rate_fraction: 0.90
+    streaming: true
+    arrival: {process: poisson}
+    input_distribution: {type: gaussian, params: {mean: 4096, std_dev: 1024, min: 512, max: 8192}}
+    output_distribution: {type: gaussian, params: {mean: 1024, std_dev: 256, min: 128, max: 2048}}

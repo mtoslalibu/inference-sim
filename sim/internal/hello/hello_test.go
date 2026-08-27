@@ -1,6 +1,10 @@
 package hello
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -202,5 +206,64 @@ func TestGreet_TotalityOverAdversarialInput(t *testing.T) {
 func TestGreet_NameMimickingCountSuffixDoesNotConfuseTheCount(t *testing.T) {
 	if c := statedCount(t, Greet("(9 recipients)", "Bob")); c != 2 {
 		t.Errorf("stated count = %d, want 2 (a name that mimics the suffix must not be read as the count)", c)
+	}
+}
+
+// TestGreet_IsPureAndDeterministic covers BC-H1-5 (INV-6): repeated calls with
+// the same input return identical strings.
+func TestGreet_IsPureAndDeterministic(t *testing.T) {
+	inputs := append(blankInputs(),
+		[]string{"Alice"},
+		[]string{"Alice", "Bob"},
+		[]string{"Alice", "Bob", "Carol"},
+		[]string{" Alice ", "", "Bob"},
+	)
+	for _, in := range inputs {
+		first := Greet(in...)
+		for i := 0; i < 100; i++ {
+			if got := Greet(in...); got != first {
+				t.Fatalf("Greet(%q) returned %q on call %d but %q on call 1 (BC-H1-5)", in, got, i+2, first)
+			}
+		}
+	}
+}
+
+// TestGreet_DoesNotMutateItsArgument covers BC-H1-5: a caller reusing its slice
+// must see it unchanged, and a second call must agree with the first.
+func TestGreet_DoesNotMutateItsArgument(t *testing.T) {
+	in := []string{"  Alice  ", "", "Bob"}
+	before := append([]string{}, in...)
+	first := Greet(in...)
+	if !reflect.DeepEqual(in, before) {
+		t.Errorf("Greet mutated its argument: %q, want %q (BC-H1-5)", in, before)
+	}
+	if second := Greet(in...); second != first {
+		t.Errorf("second call returned %q, want %q (BC-H1-5)", second, first)
+	}
+}
+
+// TestGreet_IsDeterministicAcrossProcesses covers BC-H1-5's cross-process leg.
+// Re-running the test binary in a child process is the cheapest honest check;
+// a value baked into the test would only restate the implementation.
+func TestGreet_IsDeterministicAcrossProcesses(t *testing.T) {
+	const key = "HELLO_GREET_SUBPROCESS"
+	args := []string{"Alice", "Bob", "Carol"}
+	if os.Getenv(key) == "1" {
+		fmt.Print(Greet(args...))
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("cannot locate test binary: %v", err)
+	}
+	cmd := exec.Command(exe, "-test.run", "^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), key+"=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v", err)
+	}
+	want := Greet(args...)
+	if got := string(out); !strings.Contains(got, want) {
+		t.Errorf("subprocess output %q does not contain the in-process greeting %q (BC-H1-5)", got, want)
 	}
 }

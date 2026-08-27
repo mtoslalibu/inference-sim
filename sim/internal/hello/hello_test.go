@@ -177,7 +177,7 @@ func TestGreet_TotalityOverAdversarialInput(t *testing.T) {
 		nil,
 		{},
 		{""},
-		{" "},                           // non-breaking space: unicode.IsSpace treats it as blank
+		{" "},                                // non-breaking space: unicode.IsSpace treats it as blank
 		{"%s"},                               // format verb in a name
 		{"%d", "%v"},                         // format verbs, multi path
 		{"(2 recipients)"},                   // name that mimics the count suffix

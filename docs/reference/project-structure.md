@@ -44,6 +44,8 @@ inference-sim/
 │   ├── expert_placement.go    # ExpertPlacement interface (single-method pure query) + BalancedPlacement default: maps a step's routed-token population onto busiest-GPU MoE cost (ExpertLoad: per-GPU compute tokens, expert count, dispatch/combine comm). Lives in sim core so future consumers reach it without importing latency/; consumed by trained-physics StepTime (#1419).
 │   └── internal/              # Shared internal packages
 │       ├── hash/              # Block-level hashing for prefix cache (the sole hash source)
+│       ├── hello/             # Greeting for zero or more recipients, never empty (#6 hole H1) — depends on internal/util
+│       │   └── format/        # Bracket-delimits the greeting from internal/hello (#6 hole H2)
 │       ├── kvkey/             # KV block keying (#1589): DeriveChunkKeys (chunk-stride keys, BC-K4) + Interner (BlockKey→KeyID, BC-K3); delegates all hashing to internal/hash (BC-K1)
 │       ├── testutil/          # Shared test infrastructure (golden dataset loading)
 │       ├── tokenid/           # TokenID (int32) type — defined-type compact token ID shared with sim/internal/hash

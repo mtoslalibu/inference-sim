@@ -40,23 +40,23 @@ func payloads() []string {
 // re-casing, or truncation) and BC-H2-3 (the length delta is exactly two).
 func TestFormat_BracketsWrapPayloadVerbatim(t *testing.T) {
 	for _, in := range payloads() {
-		got := Format(in)
+		got := bracket(in)
 
 		if len(got) < 2 {
-			t.Errorf("Format(%q) = %q, want length at least 2 (BC-H2-1)", in, got)
+			t.Errorf("bracket(%q) = %q, want length at least 2 (BC-H2-1)", in, got)
 			continue
 		}
 		if got[0] != '[' {
-			t.Errorf("Format(%q) = %q, want it to begin with '[' (BC-H2-1)", in, got)
+			t.Errorf("bracket(%q) = %q, want it to begin with '[' (BC-H2-1)", in, got)
 		}
 		if got[len(got)-1] != ']' {
-			t.Errorf("Format(%q) = %q, want it to end with ']' (BC-H2-1)", in, got)
+			t.Errorf("bracket(%q) = %q, want it to end with ']' (BC-H2-1)", in, got)
 		}
 		if payload := got[1 : len(got)-1]; payload != in {
-			t.Errorf("Format(%q) = %q; stripping the delimiters yields %q, want the input verbatim (BC-H2-2)", in, got, payload)
+			t.Errorf("bracket(%q) = %q; stripping the delimiters yields %q, want the input verbatim (BC-H2-2)", in, got, payload)
 		}
 		if len(got) != len(in)+2 {
-			t.Errorf("Format(%q) has length %d, want %d (BC-H2-3)", in, len(got), len(in)+2)
+			t.Errorf("bracket(%q) has length %d, want %d (BC-H2-3)", in, len(got), len(in)+2)
 		}
 	}
 }
@@ -69,8 +69,8 @@ func TestFormat_BracketsWrapPayloadVerbatim(t *testing.T) {
 // BC-H2-3 with an empty input admit exactly one answer), not captured from the
 // implementation's output.
 func TestFormat_EmptyPayloadYieldsBarePair(t *testing.T) {
-	if got := Format(""); got != "[]" {
-		t.Errorf("Format(%q) = %q, want %q (C2-3: the empty payload is not special-cased)", "", got, "[]")
+	if got := bracket(""); got != "[]" {
+		t.Errorf("bracket(%q) = %q, want %q (C2-3: the empty payload is not special-cased)", "", got, "[]")
 	}
 }
 
@@ -88,7 +88,7 @@ func TestFormat_NestingIsLinearNotIdempotent(t *testing.T) {
 		for n := 1; n <= maxNestingDepth; n++ {
 			got := in
 			for i := 0; i < n; i++ {
-				got = Format(got)
+				got = bracket(got)
 			}
 
 			openRun, closeRun := strings.Repeat("[", n), strings.Repeat("]", n)
@@ -119,8 +119,8 @@ func TestFormat_NestingIsLinearNotIdempotent(t *testing.T) {
 		}
 
 		// Non-idempotence, stated as its own assertion (BC-H2-4).
-		if once, twice := Format(in), Format(Format(in)); once == twice {
-			t.Errorf("Format(Format(%q)) == Format(%q) == %q; BC-H2-4 requires Format to nest, not to be idempotent", in, in, once)
+		if once, twice := bracket(in), bracket(bracket(in)); once == twice {
+			t.Errorf("bracket(bracket(%q)) == bracket(%q) == %q; BC-H2-4 requires Format to nest, not to be idempotent", in, in, once)
 		}
 	}
 }
@@ -155,7 +155,7 @@ func recipientInputs() [][]string {
 func TestFormat_ComposedWithGreetIsNeverABarePair(t *testing.T) {
 	for _, in := range recipientInputs() {
 		greeting := hello.Greet(in...)
-		got := Format(greeting)
+		got := Format(in...)
 
 		if len(got) < 3 {
 			t.Errorf("Format(hello.Greet(%q)) = %q, want length at least 3 (BC-H2-5)", in, got)
@@ -179,10 +179,10 @@ func TestFormat_ComposedWithGreetIsNeverABarePair(t *testing.T) {
 // the same input return identical strings within a process.
 func TestFormat_IsPureAndDeterministic(t *testing.T) {
 	for _, in := range payloads() {
-		first := Format(in)
+		first := bracket(in)
 		for i := 0; i < 100; i++ {
-			if got := Format(in); got != first {
-				t.Fatalf("Format(%q) returned %q on call %d but %q on call 1 (BC-H2-6)", in, got, i+2, first)
+			if got := bracket(in); got != first {
+				t.Fatalf("bracket(%q) returned %q on call %d but %q on call 1 (BC-H2-6)", in, got, i+2, first)
 			}
 		}
 	}
@@ -194,10 +194,10 @@ func TestFormat_IsPureAndDeterministic(t *testing.T) {
 // as hello's TestGreet_IsDeterministicAcrossProcesses.
 func TestFormat_IsDeterministicAcrossProcesses(t *testing.T) {
 	const key = "HELLO_FORMAT_SUBPROCESS"
-	const payload = "Hello, Alice, Bob and Carol! (3 recipients)"
+	const recipient = "Alice"
 
 	if os.Getenv(key) == "1" {
-		fmt.Print(Format(payload))
+		fmt.Print(Format(recipient))
 		return
 	}
 
@@ -211,7 +211,30 @@ func TestFormat_IsDeterministicAcrossProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subprocess failed: %v", err)
 	}
-	if want := Format(payload); !strings.Contains(string(out), want) {
+	if want := Format(recipient); !strings.Contains(string(out), want) {
 		t.Errorf("subprocess output %q does not contain the in-process result %q (BC-H2-6)", string(out), want)
 	}
+}
+
+// FuzzBracket quantifies BC-H2-1, BC-H2-2 and BC-H2-3 over arbitrary bytes
+// rather than over the payloads() table. The table is a fixed 16 entries, so a
+// bracket that silently dropped some byte class outside it — a stray "\r", say —
+// would satisfy every table-driven assertion while violating all three
+// contracts. The laws are cheap to state universally, so state them universally.
+func FuzzBracket(f *testing.F) {
+	for _, seed := range payloads() {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, payload string) {
+		got := bracket(payload)
+		if !strings.HasPrefix(got, "[") || !strings.HasSuffix(got, "]") || len(got) < 2 {
+			t.Fatalf("bracket(%q) = %q, want it delimited by '[' and ']' (BC-H2-1)", payload, got)
+		}
+		if inner := got[1 : len(got)-1]; inner != payload {
+			t.Fatalf("bracket(%q) = %q; interior is %q, want the payload verbatim (BC-H2-2)", payload, got, inner)
+		}
+		if len(got) != len(payload)+2 {
+			t.Fatalf("bracket(%q) has length %d, want %d (BC-H2-3)", payload, len(got), len(payload)+2)
+		}
+	})
 }

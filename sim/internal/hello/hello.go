@@ -16,8 +16,9 @@ import (
 // input that carries at least one name (BC-H1-3).
 const genericGreeting = "Hello there!"
 
-// singleFormat greets a recipient list. The comma after "Hello" is what keeps
-// every non-blank result distinct from genericGreeting (BC-H1-3).
+// singleFormat greets exactly one recipient, stating no count (C-3). The comma
+// after "Hello" is what keeps every non-blank result distinct from
+// genericGreeting (BC-H1-3).
 const singleFormat = "Hello, %s!"
 
 // multiFormat greets two or more recipients and states how many it names. The
@@ -35,7 +36,7 @@ func Greet(names ...string) string {
 	case 0:
 		return genericGreeting
 	case 1:
-		return fmt.Sprintf(singleFormat, kept[0])
+		return fmt.Sprintf(singleFormat, joinNames(kept))
 	default:
 		return fmt.Sprintf(multiFormat, joinNames(kept), util.Len64(kept))
 	}
@@ -56,7 +57,9 @@ func usableNames(names []string) []string {
 
 // joinNames renders the kept names as a human-readable list: "A" for one,
 // "A and B" for two, "A, B and C" for three or more. Order follows the argument
-// order. Callers must pass at least one name.
+// order. Callers must pass at least one name; Greet's switch guarantees that,
+// and both the one-name and many-name branches are reached from it, so neither
+// is dead code.
 func joinNames(kept []string) string {
 	last := len(kept) - 1
 	if last == 0 {

@@ -168,3 +168,39 @@ func TestGreet_SingleNameStatesNoCount(t *testing.T) {
 		t.Errorf("Greet(\"Alice\") = %q, want no stated count (C-3)", got)
 	}
 }
+
+// TestGreet_TotalityOverAdversarialInput covers BC-H1-1 over adversarial but
+// ordinary input. Library code must not panic on ordinary input, so this also
+// guards the error-handling boundary in principles.md.
+func TestGreet_TotalityOverAdversarialInput(t *testing.T) {
+	inputs := [][]string{
+		nil,
+		{},
+		{""},
+		{" "},                           // non-breaking space: unicode.IsSpace treats it as blank
+		{"%s"},                               // format verb in a name
+		{"%d", "%v"},                         // format verbs, multi path
+		{"(2 recipients)"},                   // name that mimics the count suffix
+		{"(2 recipients)", "(9 recipients)"}, // ...on the multi path
+		{"", "Alice", ""},
+		{strings.Repeat("x", 10000)},
+		{strings.Repeat("x", 1000), strings.Repeat("y", 1000)},
+		{"Alice", "", "Bob", " ", "Carol"},
+		{"[", "]"},
+		{"\x00"},
+	}
+	for _, in := range inputs {
+		got := Greet(in...)
+		if len(got) == 0 {
+			t.Errorf("Greet(%q) returned the empty string; BC-H1-1 requires length > 0", in)
+		}
+	}
+}
+
+// TestGreet_NameMimickingCountSuffixDoesNotConfuseTheCount covers BC-H1-4: a
+// recipient name that looks like the count suffix must not be read as the count.
+func TestGreet_NameMimickingCountSuffixDoesNotConfuseTheCount(t *testing.T) {
+	if c := statedCount(t, Greet("(9 recipients)", "Bob")); c != 2 {
+		t.Errorf("stated count = %d, want 2 (a name that mimics the suffix must not be read as the count)", c)
+	}
+}

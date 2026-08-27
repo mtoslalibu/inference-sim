@@ -3,6 +3,8 @@ package format
 import (
 	"strings"
 	"testing"
+
+	"github.com/inference-sim/inference-sim/sim/internal/hello"
 )
 
 // payloads enumerates the input shapes the contracts have to survive: the empty
@@ -116,6 +118,56 @@ func TestFormat_NestingIsLinearNotIdempotent(t *testing.T) {
 		// Non-idempotence, stated as its own assertion (BC-H2-4).
 		if once, twice := Format(in), Format(Format(in)); once == twice {
 			t.Errorf("Format(Format(%q)) == Format(%q) == %q; BC-H2-4 requires Format to nest, not to be idempotent", in, in, once)
+		}
+	}
+}
+
+// recipientInputs enumerates the recipient-name shapes BC-H2-5 quantifies over,
+// mirroring the input classes hello's own totality suite uses: no names, blank
+// names, one name, many names, and blanks mixed with usable names.
+func recipientInputs() [][]string {
+	return [][]string{
+		nil,
+		{},
+		{""},
+		{" "},
+		{"\t\n"},
+		{"", ""},
+		{"Alice"},
+		{"  Alice  "},
+		{"Alice", "Bob"},
+		{"Alice", "Bob", "Carol"},
+		{"", "Alice", " "},
+		{"[", "]"},
+		{"%s"},
+		{"(2 recipients)"},
+	}
+}
+
+// TestFormat_ComposedWithGreetIsNeverABarePair covers BC-H2-5: composing Format
+// over a hello greeting never yields the bare "[]". This is BC-H1-1 (a greeting
+// is never empty) surviving composition, so it is the one contract that spans
+// both holes — and the reason this package's declared dependency on hello is
+// exercised rather than asserted.
+func TestFormat_ComposedWithGreetIsNeverABarePair(t *testing.T) {
+	for _, in := range recipientInputs() {
+		greeting := hello.Greet(in...)
+		got := Format(greeting)
+
+		if len(got) < 3 {
+			t.Errorf("Format(hello.Greet(%q)) = %q, want length at least 3 (BC-H2-5)", in, got)
+		}
+		if got == "[]" {
+			t.Errorf("Format(hello.Greet(%q)) = %q, the bare delimiter pair; BC-H2-5 forbids it", in, got)
+		}
+		// Anchors BC-H2-5 to BC-H2-2/BC-H2-3 as well: were Format ever to trim or
+		// truncate a greeting, the length law would catch it here too, not only in
+		// the standalone payload sweep.
+		if len(got) != len(greeting)+2 {
+			t.Errorf("Format(hello.Greet(%q)) has length %d, want %d (BC-H2-3 under composition)", in, len(got), len(greeting)+2)
+		}
+		if !strings.Contains(got, greeting) {
+			t.Errorf("Format(hello.Greet(%q)) = %q, want it to carry the greeting %q verbatim (BC-H2-2 under composition)", in, got, greeting)
 		}
 	}
 }

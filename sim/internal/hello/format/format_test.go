@@ -55,3 +55,16 @@ func TestFormat_BracketsWrapPayloadVerbatim(t *testing.T) {
 		}
 	}
 }
+
+// TestFormat_EmptyPayloadYieldsBarePair pins CLARIFICATION C2-3: the empty
+// string is not special-cased or rejected, so it has a bracketed form like any
+// other input. BC-H2-5's "never a bare pair" is a property of composing with a
+// greeting, not of Format alone, and this test keeps the two from being
+// conflated. The literal is derived from the contracts by hand (BC-H2-2 plus
+// BC-H2-3 with an empty input admit exactly one answer), not captured from the
+// implementation's output.
+func TestFormat_EmptyPayloadYieldsBarePair(t *testing.T) {
+	if got := Format(""); got != "[]" {
+		t.Errorf("Format(%q) = %q, want %q (C2-3: the empty payload is not special-cased)", "", got, "[]")
+	}
+}

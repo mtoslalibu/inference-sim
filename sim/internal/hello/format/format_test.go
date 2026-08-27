@@ -68,3 +68,54 @@ func TestFormat_EmptyPayloadYieldsBarePair(t *testing.T) {
 		t.Errorf("Format(%q) = %q, want %q (C2-3: the empty payload is not special-cased)", "", got, "[]")
 	}
 }
+
+// maxNestingDepth is the deepest nesting the metamorphic law is exercised at.
+// The law is depth-independent, so a small bound is enough to distinguish linear
+// nesting from an idempotent implementation.
+const maxNestingDepth = 5
+
+// TestFormat_NestingIsLinearNotIdempotent covers BC-H2-4: applying Format n
+// times nests exactly n delimiter pairs around an intact payload. Non-idempotence
+// is asserted directly rather than left implied, so no caller can assume
+// double-wrapping is a no-op.
+func TestFormat_NestingIsLinearNotIdempotent(t *testing.T) {
+	for _, in := range payloads() {
+		for n := 1; n <= maxNestingDepth; n++ {
+			got := in
+			for i := 0; i < n; i++ {
+				got = Format(got)
+			}
+
+			openRun, closeRun := strings.Repeat("[", n), strings.Repeat("]", n)
+			if !strings.HasPrefix(got, openRun) || !strings.HasSuffix(got, closeRun) {
+				t.Errorf("Format applied %d times to %q = %q, want prefix %q and suffix %q (BC-H2-4)", n, in, got, openRun, closeRun)
+				continue
+			}
+			if len(got) != len(in)+2*n {
+				t.Errorf("Format applied %d times to %q has length %d, want %d (BC-H2-4)", n, in, len(got), len(in)+2*n)
+				continue
+			}
+			if payload := got[n : len(got)-n]; payload != in {
+				t.Errorf("Format applied %d times to %q leaves payload %q, want %q intact (BC-H2-4)", n, in, payload, in)
+			}
+
+			// "Exactly n" is only well defined when the payload does not itself
+			// start or end with a delimiter: nesting "[x]" once legitimately
+			// yields a leading run of two. For those payloads the prefix, length,
+			// and payload laws above already pin the count.
+			if !strings.HasPrefix(in, "[") && !strings.HasSuffix(in, "]") {
+				if gotOpen := len(got) - len(strings.TrimLeft(got, "[")); gotOpen != n {
+					t.Errorf("Format applied %d times to %q has %d leading '[', want exactly %d (BC-H2-4)", n, in, gotOpen, n)
+				}
+				if gotClose := len(got) - len(strings.TrimRight(got, "]")); gotClose != n {
+					t.Errorf("Format applied %d times to %q has %d trailing ']', want exactly %d (BC-H2-4)", n, in, gotClose, n)
+				}
+			}
+		}
+
+		// Non-idempotence, stated as its own assertion (BC-H2-4).
+		if once, twice := Format(in), Format(Format(in)); once == twice {
+			t.Errorf("Format(Format(%q)) == Format(%q) == %q; BC-H2-4 requires Format to nest, not to be idempotent", in, in, once)
+		}
+	}
+}

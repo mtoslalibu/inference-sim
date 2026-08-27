@@ -1,6 +1,9 @@
 package format
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -169,5 +172,46 @@ func TestFormat_ComposedWithGreetIsNeverABarePair(t *testing.T) {
 		if !strings.Contains(got, greeting) {
 			t.Errorf("Format(hello.Greet(%q)) = %q, want it to carry the greeting %q verbatim (BC-H2-2 under composition)", in, got, greeting)
 		}
+	}
+}
+
+// TestFormat_IsPureAndDeterministic covers BC-H2-6 (INV-6): repeated calls with
+// the same input return identical strings within a process.
+func TestFormat_IsPureAndDeterministic(t *testing.T) {
+	for _, in := range payloads() {
+		first := Format(in)
+		for i := 0; i < 100; i++ {
+			if got := Format(in); got != first {
+				t.Fatalf("Format(%q) returned %q on call %d but %q on call 1 (BC-H2-6)", in, got, i+2, first)
+			}
+		}
+	}
+}
+
+// TestFormat_IsDeterministicAcrossProcesses covers BC-H2-6's cross-process leg.
+// Re-running the test binary in a child process is the cheapest honest check; a
+// value baked into the test would only restate the implementation. Same pattern
+// as hello's TestGreet_IsDeterministicAcrossProcesses.
+func TestFormat_IsDeterministicAcrossProcesses(t *testing.T) {
+	const key = "HELLO_FORMAT_SUBPROCESS"
+	const payload = "Hello, Alice, Bob and Carol! (3 recipients)"
+
+	if os.Getenv(key) == "1" {
+		fmt.Print(Format(payload))
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("cannot locate test binary: %v", err)
+	}
+	cmd := exec.Command(exe, "-test.run", "^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), key+"=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v", err)
+	}
+	if want := Format(payload); !strings.Contains(string(out), want) {
+		t.Errorf("subprocess output %q does not contain the in-process result %q (BC-H2-6)", string(out), want)
 	}
 }

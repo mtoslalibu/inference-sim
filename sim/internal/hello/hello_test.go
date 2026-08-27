@@ -53,6 +53,9 @@ func TestGreet_SingleNameIsCarriedThrough(t *testing.T) {
 		{"Zo\u00eb", "Zo\u00eb"},
 		{"\u540d\u524d", "\u540d\u524d"},
 		{"O'Brien", "O'Brien"},
+		// Collides with the generic greeting's own wording. Without this row the
+		// BC-H1-3 check below cannot fail: no other name can coincide with it.
+		{"there", "there"},
 	}
 	for _, c := range cases {
 		got := Greet(c.in)

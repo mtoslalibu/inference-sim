@@ -1,6 +1,8 @@
 package hello
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -84,5 +86,85 @@ func TestGreet_MultipleNamesAreAllCarriedThrough(t *testing.T) {
 	}
 	if got == Greet() {
 		t.Errorf("Greet(%q) = %q, which equals the generic greeting (BC-H1-3)", names, got)
+	}
+}
+
+// countRE extracts the recipient count from the tail of a multi-recipient
+// greeting. It is anchored at the end of the string so a recipient name that
+// happens to look like the suffix cannot be mistaken for it.
+var countRE = regexp.MustCompile(`\((\d+) recipients\)$`)
+
+// statedCount returns the count a multi-recipient greeting states.
+func statedCount(t *testing.T, greeting string) int {
+	t.Helper()
+	m := countRE.FindStringSubmatch(greeting)
+	if m == nil {
+		t.Fatalf("greeting %q states no recipient count (BC-H1-4)", greeting)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("greeting %q has an unparseable count %q: %v", greeting, m[1], err)
+	}
+	return n
+}
+
+// TestGreet_StatedCountEqualsNamesCarriedThrough covers BC-H1-4: the count the
+// greeting states equals the number of names it carries through per BC-H1-2.
+func TestGreet_StatedCountEqualsNamesCarriedThrough(t *testing.T) {
+	names := []string{"Alice", "Bob", "Carol", "Dave"}
+	for n := 2; n <= len(names); n++ {
+		in := names[:n]
+		got := Greet(in...)
+		if c := statedCount(t, got); c != n {
+			t.Errorf("Greet(%q) states %d recipients, want %d (BC-H1-4)", in, c, n)
+		}
+		for _, name := range in {
+			if !strings.Contains(got, name) {
+				t.Errorf("Greet(%q) = %q, want it to contain %q (BC-H1-2 under BC-H1-4)", in, got, name)
+			}
+		}
+	}
+}
+
+// TestGreet_CountMetamorphicUnderAddingNames covers BC-H1-4's metamorphic law:
+// one more distinct non-blank name raises the stated count by exactly one, and
+// a blank name does not change it.
+func TestGreet_CountMetamorphicUnderAddingNames(t *testing.T) {
+	extra := []string{"Carol", "Dave", "Erin", "Frank"}
+	in := []string{"Alice", "Bob"}
+	prev := statedCount(t, Greet(in...))
+	if prev != 2 {
+		t.Fatalf("baseline count = %d, want 2", prev)
+	}
+	for _, name := range extra {
+		in = append(in, name)
+		got := statedCount(t, Greet(in...))
+		if got != prev+1 {
+			t.Errorf("after adding %q the stated count = %d, want %d (BC-H1-4)", name, got, prev+1)
+		}
+		prev = got
+
+		for _, blank := range []string{"", " ", "\t\n"} {
+			withBlank := append(append([]string{}, in...), blank)
+			if c := statedCount(t, Greet(withBlank...)); c != prev {
+				t.Errorf("adding blank %q changed the stated count to %d, want %d (BC-H1-4)", blank, c, prev)
+			}
+		}
+	}
+}
+
+// TestGreet_DuplicateNamesAreCounted pins CLARIFICATION C-2: names are counted,
+// not de-duplicated, which is what makes BC-H1-4's law hold unconditionally.
+func TestGreet_DuplicateNamesAreCounted(t *testing.T) {
+	if c := statedCount(t, Greet("Alice", "Alice", "Alice")); c != 3 {
+		t.Errorf("Greet with three identical names states %d recipients, want 3 (C-2: no de-duplication)", c)
+	}
+}
+
+// TestGreet_SingleNameStatesNoCount pins CLARIFICATION C-3: a one-recipient
+// greeting states no count, so no "(1 recipients)" is ever produced.
+func TestGreet_SingleNameStatesNoCount(t *testing.T) {
+	if got := Greet("Alice"); countRE.MatchString(got) {
+		t.Errorf("Greet(\"Alice\") = %q, want no stated count (C-3)", got)
 	}
 }

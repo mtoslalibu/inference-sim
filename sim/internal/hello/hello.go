@@ -7,6 +7,8 @@ package hello
 import (
 	"fmt"
 	"strings"
+
+	"github.com/inference-sim/inference-sim/sim/internal/util"
 )
 
 // genericGreeting is returned when no usable recipient name is supplied. It is
@@ -18,6 +20,11 @@ const genericGreeting = "Hello there!"
 // every non-blank result distinct from genericGreeting (BC-H1-3).
 const singleFormat = "Hello, %s!"
 
+// multiFormat greets two or more recipients and states how many it names. The
+// count is the trailing element so it can be read unambiguously off the end of
+// the greeting, even when a recipient name mimics this suffix.
+const multiFormat = "Hello, %s! (%d recipients)"
+
 // Greet returns a greeting for the given recipient names. Names that are empty
 // or whitespace-only are ignored. With no usable name it returns a generic
 // greeting. Greet is pure: it reads no clock, no RNG, no environment, and no
@@ -27,8 +34,10 @@ func Greet(names ...string) string {
 	switch len(kept) {
 	case 0:
 		return genericGreeting
+	case 1:
+		return fmt.Sprintf(singleFormat, kept[0])
 	default:
-		return fmt.Sprintf(singleFormat, joinNames(kept))
+		return fmt.Sprintf(multiFormat, joinNames(kept), util.Len64(kept))
 	}
 }
 

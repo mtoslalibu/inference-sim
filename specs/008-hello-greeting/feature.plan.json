@@ -1,0 +1,113 @@
+{
+  "module": "",
+  "packages": [
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/internal/hello",
+      "name": "hello",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "Greet",
+          "sig": "(names ...string) string"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-H1-1",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-H1-2",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-H1-3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-H1-4",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        },
+        {
+          "name": "BC-H1-5",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim/internal/util"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/internal/hello/format",
+      "name": "format",
+      "internal": true,
+      "hole": true,
+      "surface": [
+        {
+          "kind": "func",
+          "name": "Format",
+          "sig": "(greeting string) string"
+        }
+      ],
+      "invariants": [
+        {
+          "name": "BC-H2-1",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-H2-2",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-H2-3",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        },
+        {
+          "name": "BC-H2-4",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        },
+        {
+          "name": "BC-H2-5",
+          "file": "plan",
+          "hash": "evidenced: metamorphic_test"
+        },
+        {
+          "name": "BC-H2-6",
+          "file": "plan",
+          "hash": "evidenced: property_test"
+        }
+      ],
+      "allow": [
+        "github.com/inference-sim/inference-sim/sim/internal/hello"
+      ]
+    },
+    {
+      "path": "github.com/inference-sim/inference-sim/sim/internal/util",
+      "name": "util",
+      "internal": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/internal/hello",
+      "to": "github.com/inference-sim/inference-sim/sim/internal/util",
+      "kind": "import"
+    },
+    {
+      "from": "github.com/inference-sim/inference-sim/sim/internal/hello/format",
+      "to": "github.com/inference-sim/inference-sim/sim/internal/hello",
+      "kind": "import"
+    }
+  ]
+}

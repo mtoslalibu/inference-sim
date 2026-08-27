@@ -48,6 +48,8 @@ __pycache__/*
 !model_configs/*/config.json
 !hardware_config.json
 !specs/**/testdata/*.json
+# compiled archon plans (read from the repo by /archon-pr-review)
+!specs/**/*.plan.json
 !cmd/testdata/**/*.json
 data/
 *.txt

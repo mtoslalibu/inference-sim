@@ -1,0 +1,72 @@
+# Plan: hello greeting utility
+# Tracking issue: #6 (RFC: hello greeting utility)
+# Two leaf packages under sim/internal/. No CLI, config, trace, or stdout surface.
+# Delivery order: H1 (hello) then H2 (hello/format) — strictly sequential.
+
+invariant determinism {
+  statement: same input yields byte-identical output; pure functions with no clock, no RNG, no environment, no package-level mutable state, and no map iteration (INV-6, R2)
+  evidence: property_test
+}
+
+# ---------------------------------------------------------------------------
+# Existing packages the plan depends on (imported, not modified)
+# ---------------------------------------------------------------------------
+
+box github.com/inference-sim/inference-sim/sim/internal/util
+
+# ---------------------------------------------------------------------------
+# H1 — sim/internal/hello
+# ---------------------------------------------------------------------------
+
+hole github.com/inference-sim/inference-sim/sim/internal/hello {
+  # Responsibility: produce a human-readable greeting for zero or more recipient
+  # names, guaranteeing a non-empty result.
+  surface:
+    Greet(names ...string) string
+  allow:
+    import github.com/inference-sim/inference-sim/sim/internal/util
+  contract:
+    BC-H1-1 totality: any recipient-name input whatsoever (none, one, many, empty, whitespace-only, or any mix) yields a returned string of length greater than zero [evidenced: property_test]
+    BC-H1-2 name carried through: a single recipient name non-empty after trimming appears as a substring of the returned greeting in its trimmed form [evidenced: property_test]
+    BC-H1-3 blank degrades to the generic greeting and only then: input of only empty or whitespace-only names (or no names) yields one and the same generic greeting for every such input, and any input with at least one name non-empty after trimming does not equal that generic greeting [evidenced: property_test]
+    BC-H1-4 count agreement: with two or more names non-empty after trimming, the count stated in the greeting equals the number of names actually carried through per BC-H1-2; adding one more distinct non-blank name increases the stated count by exactly one and adding a blank name does not change it [evidenced: metamorphic_test]
+    BC-H1-5 purity and determinism: identical recipient-name input yields identical strings when called repeatedly within a process and across processes; reads no clock, no RNG, no environment, no package-level mutable state, and iterates no map [evidenced: property_test]
+  evidence:
+    property_test (BC-H1-1, BC-H1-2, BC-H1-3, BC-H1-5)
+    metamorphic_test (BC-H1-4)
+  cites:
+    invariant determinism
+}
+
+# ---------------------------------------------------------------------------
+# H2 — sim/internal/hello/format
+# ---------------------------------------------------------------------------
+
+hole github.com/inference-sim/inference-sim/sim/internal/hello/format {
+  # Responsibility: delimit an already-produced greeting with brackets for
+  # presentation. Reaches utility behavior through hello, never around it —
+  # sim/internal/util is DENIED here so the two arrows stay a chain, not a triangle.
+  surface:
+    Format(greeting string) string
+  allow:
+    import github.com/inference-sim/inference-sim/sim/internal/hello
+  contract:
+    BC-H2-1 delimiter shape: for any input string the result's first character is an opening bracket and its last character is a closing bracket, and the result is at least two characters long [evidenced: property_test]
+    BC-H2-2 payload preserved verbatim: for any input string, removing exactly the first and last characters of the result yields the input unchanged, with no trimming, escaping, re-casing, or truncation [evidenced: property_test]
+    BC-H2-3 exact length delta: for any input string the result's length is exactly the input's length plus two [evidenced: property_test]
+    BC-H2-4 nesting is linear not idempotent: for any input and any nesting depth n at least 1, applying Format n times yields exactly n leading opening brackets and n trailing closing brackets with the original payload intact; Format is explicitly not idempotent [evidenced: metamorphic_test]
+    BC-H2-5 composition with H1 never yields a bare or empty pair: for any recipient-name input, formatting the H1 greeting yields a result at least three characters long, i.e. never the bare bracket pair — BC-H1-1 surviving composition [evidenced: metamorphic_test]
+    BC-H2-6 purity and determinism: as BC-H1-5, for Format [evidenced: property_test]
+  evidence:
+    property_test (BC-H2-1, BC-H2-2, BC-H2-3, BC-H2-6)
+    metamorphic_test (BC-H2-4, BC-H2-5)
+  cites:
+    invariant determinism
+}
+
+# ---------------------------------------------------------------------------
+# Declared dependencies (2 arrows, one per hole)
+# ---------------------------------------------------------------------------
+
+arrow github.com/inference-sim/inference-sim/sim/internal/hello -> github.com/inference-sim/inference-sim/sim/internal/util : import
+arrow github.com/inference-sim/inference-sim/sim/internal/hello/format -> github.com/inference-sim/inference-sim/sim/internal/hello : import
